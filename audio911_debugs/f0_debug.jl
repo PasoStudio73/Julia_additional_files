@@ -21,7 +21,7 @@ x_length=stftspec.x_length
 nwin=stftspec.setup.nwin
 noverlap=stftspec.setup.noverlap
 
-method = :pef
+method = :lhs
 freqrange = (50, 400)
 mflength = 1
 
@@ -62,15 +62,12 @@ function levinson(R_xx::AbstractVector{U}, p::Integer) where U<:Number
     return a, prediction_err, reflection_coeffs
 end
 
-############################################################################################################
-
 function get_candidates(domain::AbstractArray{T}, freqrange::NTuple{2,Int}) where T<:AbstractFloat
     range = freqrange[1]:freqrange[2]
     peaks, locs = findmax(view(domain, range, :), dims=1)
 	locs = freqrange[1] .+ map(i -> i[1], locs) .- 1
     return vec(peaks), locs
 end
-
 
 function i_clip(x::AbstractVector{<:AbstractFloat}, range::Tuple{Int, Int})
 	x[x.<range[1]] .= range[1]
@@ -113,6 +110,13 @@ function pitch_estimation_filter(freq::AbstractVector{<:AbstractFloat})
 	npad = findfirst(x -> x >= 1, q) - 1
 
 	return a_filt, npad
+end
+
+function get_trimmedspec(x::AbstractArray{<:AbstractFloat}, nfft::Int64, maxbin::Int64)
+	win = _get_window(:hamming, size(x, 1), true)
+	x_reframed = _get_wframes(x, win)
+	x_pad = (vcat(col, zeros(eltype(col), nfft - nwin)) for col in x_reframed)
+	fft(combinedims(collect(x_pad)), 1)[1:maxbin, :]
 end
 
 # ---------------------------------------------------------------------------- #
@@ -242,15 +246,42 @@ function _get_f0(
 
 		z_pad = combinedims(collect(vcat(col, zeros(eltype(col), m2 - size(z, 1))) for col in eachcol(z)))
 		a_filt_pad = vcat(a_filt', zeros(eltype(a_filt), m2 - length(a_filt)))
-		c1 = real.(ifft(fft(z_pad, 1) .* conj(fft(a_filt_pad)), 1))
+		c1 = real.(ifft(fft(z_pad, 1) .* conj.(fft(a_filt_pad)), 1))
 
-		r = [c1[m2.-mxl.+1:m2, :]; c1[1:mxl+1, :]]
+		r = [c1[m2 .- mxl .+ (1:mxl), :]; c1[1:mxl+1, :]]
 
-		domain = R[edge[end]+1:end, :]
+		domain = r[logfrqrange[2]+1:end, :]
 
-	# elseif method == :cep
-	# elseif method == :lhs
+		_, locs = get_candidates(domain, logfrqrange)
 
+		f0 = logspaced_freq[vec(locs)]
+
+	elseif method == :cep
+		nfft = nextpow(2, 2 * nwin - 1)
+		win = _get_window(:hamming, nwin, true)
+		x_reframed = _get_wframes(x, win)
+		x_pad = (vcat(col, zeros(eltype(col), nfft - nwin)) for col in x_reframed)
+		x_refft = fft(combinedims(collect(x_pad)), 1)[1:div(nfft, 2)+1, :]
+
+		domain = real.(ifft(log.(abs.(fft(combinedims(collect(x_pad)), 1)).^2), 1))
+
+		_, locs = get_candidates(domain, freqrange)
+
+		f0 = sr ./ vec(locs)
+
+	elseif method == :lhs
+		maxbin = 5 * (freqrange[2] + 1)
+		s = log.(abs.(get_trimmedspec(x, sr, maxbin)))
+
+		@views domain = 
+			s[1:(freqrange[2]+1), :] + 
+			s[1:2:(freqrange[2]+1)*2, :] +
+			s[1:3:(freqrange[2]+1)*3, :] +
+			s[1:4:(freqrange[2]+1)*4, :] +
+			s[1:5:end, :]
+
+		_, locs = get_candidates(domain, freqrange)
+		f0 = vec(Float64.(locs))
 	end
 
 	F0(sr, F0Setup(method, freqrange, mflength), F0Data(f0))
