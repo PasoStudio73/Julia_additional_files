@@ -11,7 +11,7 @@ TESTFILE = "common_voice_en_23616312.wav"; sr = 16000
 # TESTFILE = "03-01-02-01-02-01-05.wav"; sr = 48000
 wavfile = joinpath(TESTPATH, TESTFILE)
 
-audio = load_audio(source=wavfile, sr=sr, norm=true);
+audio = load_audio(wavfile, sr, norm=true);
 save_audio(audio, "/home/paso/Documents/Aclai/Julia_additional_files/audio911_tests/speech.wav")
 
 # matlab standard
