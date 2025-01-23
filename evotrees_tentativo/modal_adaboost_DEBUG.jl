@@ -28,13 +28,13 @@ rng = Random.Xoshiro(train_seed)
 Random.seed!(train_seed)
 
 m1 = SoleXplorer.get_model(:modal_adaboost; relations=:IA7, features, set=X)
-ds1 = SoleXplorer.preprocess_dataset(X_selected, y_selected, m1, features, train_ratio=0.99, treatment_params=(nwindows=3,))
+ds1 = SoleXplorer.prepare_dataset(X_selected, y_selected, m1, features, train_ratio=0.99, treatment_params=(nwindows=3,))
 
 
 # m1 = SoleXplorer.get_model(:adaboost)
 
 # m3 = SoleXplorer.get_model(:modal_adaboost; relations=:IA7, features, set=X)
-# ds2 = SoleXplorer.preprocess_dataset(X, y, m2; features, treatment_params=(nwindows=10,))
+# ds2 = SoleXplorer.prepare_dataset(X, y, m2; features, treatment_params=(nwindows=10,))
 
 SoleXplorer.modelfit!(m1, ds1; features, rng)
 # SoleXplorer.modelfit!(m2, ds1; features, rng)

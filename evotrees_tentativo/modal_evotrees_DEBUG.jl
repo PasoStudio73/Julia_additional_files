@@ -35,8 +35,8 @@ Random.seed!(train_seed)
 
 model = SoleXplorer.get_model(:modal_evotree_classifier; relations=:IA7, features, set=X)
 mtest = SoleXplorer.get_model(:decision_tree)
-ds = SoleXplorer.preprocess_dataset(X_selected, y_selected, model, features=features, train_ratio=0.99, treatment_params=(nwindows=3,))
-test = SoleXplorer.preprocess_dataset(X_selected, y_selected, mtest, features=features, train_ratio=0.99)
+ds = SoleXplorer.prepare_dataset(X_selected, y_selected, model, features=features, train_ratio=0.99, treatment_params=(nwindows=3,))
+test = SoleXplorer.prepare_dataset(X_selected, y_selected, mtest, features=features, train_ratio=0.99)
 mach = MLJ.machine(model.classifier, ds.X, ds.y)
 
 # fit!(mach, verbosity=0)

@@ -349,7 +349,7 @@ end
 # Random.seed!(train_seed)
 
 # model = SoleXplorer.get_model(model_name)
-# ds = SoleXplorer.preprocess_dataset(X, y, model, features=features)
+# ds = SoleXplorer.prepare_dataset(X, y, model, features=features)
 
 # classifier = AdaBoostModalClassifier(; n_iter=10, feature_importance=:impurity, rng=Random.TaskLocalRNG(),)
 
