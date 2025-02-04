@@ -4,41 +4,74 @@ using CategoricalArrays
 using XGBoost, MLJXGBoostInterface
 using Sole, SoleXplorer
 import MLJModelInterface as MMI
-using MLJDecisionTreeInterface, Random
+using MLJDecisionTreeInterface
 
-train_path = joinpath(@__DIR__, "train.csv")
-test_path = joinpath(@__DIR__, "test.csv")
+x, y = @load_iris
+X = DataFrame(x)
 
-dtrain = CSV.read(train_path, DataFrame)
-dtest = CSV.read(test_path, DataFrame)
+fixed_indices = [83, 12, 145, 22, 98, 125, 44, 3, 150, 67, 89, 31, 122, 15, 78, 99, 45, 11, 134, 52, 23, 120, 48, 88, 28, 4, 65, 17, 127, 49]
+train_indices = setdiff(1:150, fixed_indices)
 
-# X, y = @load_iris
-# tt = MLJ.partition(eachindex(y), 0.2; shuffle=true, rng=1)
+feature_names = names(X)
+labels       = unique(y)
+nlabels      = length(labels)
 
-x_train = dtrain[:, 1:end-1]
-x_test = dtest[:, 1:end-1]
+X_train = X[train_indices, :]
+X_test  = X[fixed_indices, :]
+y_train = y[train_indices]
+y_test  = y[fixed_indices]
 
-y_train = CategoricalArray(map(x -> x == 1 ? "yes" : "no", dtrain[:, end]))
-y_test = CategoricalArray(map(x -> x == 1 ? "yes" : "no", dtest[:, end]))
+y_coded_train = @. CategoricalArrays.levelcode(y_train) - 1 # convert to 0-based indexing
+y_coded_test  = @. CategoricalArrays.levelcode(y_test)  - 1 # convert to 0-based indexing
 
-plain_classifier = XGBoostClassifier(num_round=100, max_depth=3, seed=123)
-m = machine(plain_classifier, x_train, y_train)
-fit!(m,verbosity = 0)
+dstrain = XGBoost.DMatrix((X_train, y_coded_train); feature_names)
+dstest  = XGBoost.DMatrix((X_test, y_coded_test);   feature_names)
 
-fitresult, cache, report = MLJBase.fit(plain_classifier, 0, x_train, y_train;)
+bst = XGBoost.xgboost(dstrain, num_round=10, max_depth=3, num_class=nlabels, objective="multi:softmax")
 
-yhat = mode.(MLJ.predict(plain_classifier, fitresult, x_test))
-classification_rate = 1- sum(yhat .!= y_test)/length(y_test)
+# return AbstractTrees.jl compatible tree objects describing the model
+bst_tree = XGBoost.trees(bst)
 
-#########################################
+# create and train a gradient boosted tree model of 5 trees
+bst = XGBoost.xgboost(dtrain, num_round=5, max_depth=6, objective="reg:squarederror")
+y_predict = XGBoost.predict(bst, dtest)
 
-# function xgboost
-type   = MLJXGBoostInterface.XGBoostClassifier
-config = (; algo=:classification, type=SoleXplorer.DecisionEnsemble, treatment=:aggregate)
+# early stopping
+bst = XGBoost.xgboost(dtrain, 
+    num_round = 100, 
+    eval_metric = "rmse", 
+    watchlist = OrderedDict(["train" => dtrain, "eval" => dtest]), 
+    early_stopping_rounds = 5, 
+    max_depth=6, 
+    η=0.3
+)
+# get the best iteration and use it for prediction
+y_predict = XGBoost.predict(bst, dtest, ntree_limit = bst.best_iteration)
 
+bst = XGBoost.xgboost(dtrain, num_round=1; XGBoost.randomforest()...)
+
+# we can also retain / use the best score (based on eval_metric) which is stored in the booster
+println("Best RMSE from model training $(round((bst.best_score), digits = 8)).")
+
+prediction_rounded = round.(Int, y_predict)
+
+MLBase.errorrate(y_code[tt_pairs.test], prediction_rounded)
+MLBase.confusmat(length(levels(y_code)), Array(y_code[tt_pairs.test] .+ 1), Array(prediction_rounded) .+ 1)
+
+XGBoost.importancetable(bst)
+
+# return AbstractTrees.jl compatible tree objects describing the model
+bst_tree = XGBoost.trees(bst)
+
+AbstractTrees.repr_tree(bst_tree)
+AbstractTrees.print_tree(bst_tree)
+
+############à#######
+# function xgboost #
+####################
 params = (;
     test                        = 1, 
-    num_round                   = 100, 
+    num_round                   = 10, 
     booster                     = "gbtree", 
     disable_default_eval_metric = 0, 
     eta                         = 0.3, 
@@ -71,8 +104,7 @@ params = (;
     feature_selector            = "cyclic", 
     top_k                       = 0, 
     tweedie_variance_power      = 1.5, 
-    # objective                   = "automatic", 
-    objective                   = "binary:logistic", 
+    objective                   = "automatic", 
     base_score                  = 0.5, 
     early_stopping_rounds       = 0, 
     watchlist                   = nothing, 
@@ -83,15 +115,27 @@ params = (;
     eval_metric                 = String[]
 )
 
-# tuning = (
-#     tuning        = true,
-#     method        = (type = latinhypercube, ntour = 20),
-#     params        = SoleXplorer.TUNING_PARAMS,
-#     ranges        = [
-#         model -> MLJ.range(model, :max_depth, lower=3, upper=6),
-#         model -> MLJ.range(model, :sample_type, values=["uniform", "weighted"])
-#     ]
-# )
+classifier = MLJXGBoostInterface.XGBoostClassifier(; params...)
+mach = MLJ.machine(classifier, X_train, y_train)
+fit!(mach, verbosity=0)
+
+# learn_method = (
+#     (mach, X, y) -> begin
+        fitresult = SoleModels.fitted_params(mach)
+
+        solemodel(fitresult.trees, fitresult.encoding)
+
+
+plain_classifier = XGBoostClassifier(num_round=10, max_depth=3)
+m = machine(plain_classifier, X_train, y_train)
+fit!(m,verbosity = 0)
+
+fitresult, cache, report = MLJBase.fit(plain_classifier, 0, X_train, y_train;)
+
+yhat = mode.(MLJ.predict(plain_classifier, fitresult, x_test))
+classification_rate = 1- sum(yhat .!= y_test)/length(y_test)
+
+
 
 classifier = MLJXGBoostInterface.XGBoostClassifier(; params...)
 mach = MLJ.machine(classifier, x_train, y_train)
