@@ -46,13 +46,13 @@ Returns (X, y)
 macro load_adult()
     quote
         # url = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
-        # fname = "adult.data"
-        # cols = ["age", "workclass", "fnlwgt", "education",
-        #     "education_num", "marital_status", "occupation",
-        #     "relationship", "race", "sex", "capital_gain",
-        #     "capital_loss", "hours_per_week", "native_country",
-        #     "income_per_year"
-        # ]
+        fname = "adult.data"
+        cols = ["age", "workclass", "fnlwgt", "education",
+            "education_num", "marital_status", "occupation",
+            "relationship", "race", "sex", "capital_gain",
+            "capital_loss", "hours_per_week", "native_country",
+            "income_per_year"
+        ]
         # ensure_download(url, fname)
         fpath = joinpath(MODULE_DIR, fname)
         data = DataFrame(CSV.File(fpath, header=cols, silencewarnings=true, delim=", "); copycols = false)
@@ -77,19 +77,19 @@ X, _ = code_dataframe = SoleXplorer.code_dataframe(X, y)
 train_seed = 7
 rng        = Random.Xoshiro(train_seed)
 Random.seed!(train_seed)
-ds = prepare_dataset(X, y, train_ratio=0.8, valid_ratio=0.8, algo=:classification, shuffle=true)
-modelset = validate_modelset(models, typeof(y))
-# Train the model
-params = (
-    num_round=5000,
-    eta=0.01,
-    objective="binary:logistic",
-    subsample=0.5,
-    base_score=mean(unwrap.(ds.ytrain)),
-    eval_metric="logloss",
-    early_stopping_rounds=20,
-    watchlist=makewatchlist
-)
+# ds = prepare_dataset(X, y, train_ratio=0.8, valid_ratio=0.8, algo=:classification, shuffle=true)
+# modelset = validate_modelset(models, typeof(y))
+# # Train the model
+# params = (
+#     num_round=5000,
+#     eta=0.01,
+#     objective="binary:logistic",
+#     subsample=0.5,
+#     base_score=mean(unwrap.(ds.ytrain)),
+#     eval_metric="logloss",
+#     early_stopping_rounds=20,
+#     watchlist=makewatchlist
+# )
 
 result = traintest(X, y; 
     models=(
