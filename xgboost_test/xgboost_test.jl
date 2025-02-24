@@ -5,7 +5,7 @@ using XGBoost, MLJXGBoostInterface
 using SoleXplorer, SoleModels
 import MLJModelInterface as MMI
 using MLJDecisionTreeInterface
-using AbstractTrees, StatsBase, Random
+using StatsBase, Random
 
 X, y       = SoleData.load_arff_dataset("NATOPS")
 train_seed = 11
