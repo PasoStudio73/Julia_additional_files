@@ -15,9 +15,72 @@ using Statistics
 using MLBase
 using NaturalSort
 
+using SparseArrays, LinearAlgebra
+using ScikitLearn
+using MLJ
+using Base.Threads: @threads
 
-using PyCall
-fs = pyimport_conda("sklearn.feature_selection", "scikit-learn")
+function estimate_mi(
+    X,
+    y;
+    discrete_features="auto",
+    discrete_target=false,
+    n_neighbors=3,
+    copy=true,
+    random_state=nothing,
+    n_jobs=nothing
+)
+X=DataFrame(X, :auto)
+@show typeof(X)
+    n_samples, n_features = size(X)
+
+    if discrete_features isa String
+        if discrete_features == "auto"
+            discrete_features = issparse(X)
+        else
+            error("Valore non valido per discrete_features.")
+        end
+    end
+
+    if discrete_features isa Bool
+        discrete_mask = fill(discrete_features, n_features)
+    else
+        discrete_mask = falses(n_features)
+        discrete_mask[discrete_features] .= true
+    end
+
+    continuous_mask = .!discrete_mask
+
+    if any(continuous_mask) && issparse(X)
+        error("Una matrice sparsa `X` non può avere caratteristiche continue.")
+    end
+
+    rng = Random.MersenneTwister(random_state)
+    if any(continuous_mask)
+        X = copy ? deepcopy(X) : X
+
+        a=machine(Standardizer(), X[:, continuous_mask]) |> MLJ.fit!
+        @show MLJ.transform(a, X[:, continuous_mask])
+        X[:, continuous_mask] = MLJ.transform(a, X[:, continuous_mask])
+        # X[:, continuous_mask] .= fit_transform!(StandardScaler(), X[:, continuous_mask])
+
+        means = max.(1, mean(abs.(X[:, continuous_mask]), dims=1))
+        X[:, continuous_mask] .+= 1e-10 .* means .* randn(rng, n_samples, sum(continuous_mask))
+    end
+
+    if !discrete_target
+        y = fit_transform!(StandardScaler(), y)
+        y .+= 1e-10 * max(1, mean(abs.(y))) * randn(rng, n_samples)
+    end
+
+    mi = Vector{Float64}(undef, n_features)
+
+    @threads for i in 1:n_features
+        mi[i] = compute_mi(X[:, i], y, discrete_mask[i], discrete_target, n_neighbors)
+    end
+
+    return mi
+end
 
 struct PyMutualInformationClassif{T <: SoleFeatures.AbstractLimiter} <: SoleFeatures.AbstractMutualInformationClassif{T}
     limiter::T
@@ -33,7 +96,7 @@ function SoleFeatures.score(
 )::Vector{Float64}
     # Convert DataFrame to Matrix for scikit-learn
     X_matrix = Matrix(X)
-    scores = fs.mutual_info_classif(X_matrix, y)
+    scores = estimate_mi(X_matrix, y)
     return Float64.(scores)
 end
 
@@ -535,7 +598,6 @@ function feature_selection(
         end
         currX = @view newX[:,current_dataset_col_slice]
 
-        @show typeof(fsm.selector)
         dataset_param = isnothing(y) || SoleFeatures.is_unsupervised(fsm.selector) ? (currX,) : (currX, y)
 
         score, idxes, g_indices =
