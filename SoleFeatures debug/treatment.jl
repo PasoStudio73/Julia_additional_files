@@ -175,7 +175,7 @@ function feature_selection_preprocess(
     isnothing(features) && (features = DEFAULT_FE.features)
     treatment = :feature_selection
     _ = _check_dimensions(X)
-    winparams = isnothing(nwindows) ? DEFAULT_FE_WINPARAMS : merge(DEFAULT_FE_WINPARAMS, (nwindows = nwindows,))
+    winparams = isnothing(nwindows) ? DEFAULT_FE_WINPARAMS : merge(DEFAULT_FE_WINPARAMS, (nwindows = nwindows, relative_overlap=0.05))
 
     _treatment(X, vnames, treatment, features, winparams)
 end
