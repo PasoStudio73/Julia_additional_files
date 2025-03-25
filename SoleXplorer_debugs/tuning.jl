@@ -112,7 +112,7 @@ end
 function get_tuning(model::T, tuning::S; 
     ranges::Union{Nothing, S, AbstractVector{S}}=nothing,
     kwargs...
-) where {T<:SoleXplorer.ModelConfig, S<:MLJTuning.TuningStrategy}
+) where {T<:SoleXplorer.Modelset, S<:MLJTuning.TuningStrategy}
     _ranges = isnothing(ranges) ? model.ranges : ranges
     valid_ranges = [f(model.classifier) for f in _ranges]
     valid_kwargs = filter(kv -> kv.first in keys(TUNEDMODEL_PARAMS), kwargs)
@@ -123,7 +123,7 @@ end
 function get_tuning(model::T, tuning_method::Symbol;
     ranges::Union{Nothing, S, AbstractVector{S}}=nothing,
     kwargs...
-) where {T<:SoleXplorer.ModelConfig, S<:Function}
+) where {T<:SoleXplorer.Modelset, S<:Function}
 println("ciao")
     tuning = get_tuning(tuning_method; kwargs...)
     get_tuning(model, tuning; ranges=ranges, kwargs...)
