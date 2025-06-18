@@ -143,7 +143,7 @@ function _treatment(
                 ]...)
             )
         elseif treatment == :reducesize
-            f = haskey(_wparams, :reducefunc) ? _wparams.reducefunc : mean
+            f = haskey(_wparams, :modalreduce) ? _wparams.modalreduce : mean
             push!(valid_X, [
                 vcat([f(col[r]) for r in row_intervals],
                     # if interval_diff is positive, fill the rest with NaN
