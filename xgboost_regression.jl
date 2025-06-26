@@ -248,14 +248,14 @@ model, ds = train_test(
     preprocess=(;train_ratio=0.7, rng=Xoshiro(1))
 )
 
-model, ds = symbolic_analysis(
+model = symbolic_analysis(
     Xc, yc;
     model=(;type=:xgboost),
     preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
     measures=(specificity,)
 )
 
-model, ds = symbolic_analysis(
+model = symbolic_analysis(
     Xr, yr;
     model=(type=:xgboost, params=(;num_round=2, max_depth=3, objective="reg:squarederror")),
     preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
