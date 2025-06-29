@@ -261,3 +261,71 @@ model = symbolic_analysis(
     preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
     measures=(mae,)
 )
+
+##################################################################################
+#                                      DEBUG                                     #
+##################################################################################
+train_ratio = 0.5
+seed = 1
+num_round = 10
+eta = 0.1
+
+model, mach, ds = symbolic_analysis(
+    Xr, yr;
+    model=(;type=:xgboost, params=(;eta, num_round)),
+    resample = (type=Holdout, params=(;shuffle=true)),
+    preprocess=(;train_ratio, rng=Xoshiro(seed)),
+    measures=(rms,),
+)
+
+sxhat = model.model[1].info.supporting_predictions
+yhat = MLJ.predict(mach, MLJ.table(ds.X[ds.tt[1].test, :]))
+
+# i=1
+
+p = MLJ.predict(mach, MLJ.table(ds.X[ds.tt[1].test, :]))
+
+# ---------------------------------------------------------------------------- #
+#                     build xgboost regressor from scratch                     #
+# ---------------------------------------------------------------------------- #
+X_train, y_train = ds.X[ds.tt[1].train, :], ds.y[ds.tt[1].train]
+X_test, y_test = ds.X[ds.tt[1].test, :], ds.y[ds.tt[1].test]
+
+trees        = XGB.trees(mach.fitresult[1])
+featurenames = mach.report.vals[1].features
+solem        = SoleModels.solemodel(trees, X_test, y_test; featurenames, use_float32=false)
+solem32      = SoleModels.solemodel(trees, Float32.(X_test), Float32.(y_test); featurenames)
+solem3       = SoleModels.solemodel(trees, X_test, y_test; featurenames)
+
+b   = mean(y_train)
+b32 = mean(Float32.(y_train))
+
+m   = solem
+m32 = solem32
+d   = DataFrame(X_test, :auto)
+d32 = mapcols(col -> Float32.(col), DataFrame(X_test, :auto))
+y   = y_test
+y32 = Float32.(y_test)
+
+y   = SoleModels.__apply_pre(m, d, y)
+y32 = SoleModels.__apply_pre(m, d, y32)
+
+p   = hcat([apply!(subm, d, y; mode=:replace, leavesonly=false) for subm in SoleModels.models(m)]...)
+p32 = hcat([apply!(subm, d32, y32; mode=:replace, leavesonly=false) for subm in SoleModels.models(m32)]...)
+
+p   = SoleModels.__apply_post(m, p)
+p32 = SoleModels.__apply_post(m32, p32)
+
+p   = [SoleModels.aggregation(m)(_p) for _p in eachrow(p)]
+p32 = [SoleModels.aggregation(m32)(_p) for _p in eachrow(p32)]
+
+p   = SoleModels.__apply_pre(m, d, p) * length(m.models) .+ b
+p32 = SoleModels.__apply_pre(m32, d32, p32) * length(m32.models) .+ b32
+
+r   = SoleModels.__apply!(m, :replace, p, y, true)
+r32 = SoleModels.__apply!(m32, :replace, p32, y32, true)
+
+r[1]
+# 25.160412
+
+@test r32 == yhat

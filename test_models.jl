@@ -195,14 +195,62 @@ end
                         preprocess=(;train_ratio, rng=Xoshiro(seed)),
                         measures=(rms,),
                     )
-                    sx_rms = model.measures.measures_values[1]
+                    sxhat = model.model[1].info.supporting_predictions
                     yhat = MLJ.predict_mode(mach, MLJ.table(ds.X[ds.tt[1].test, :]))
+                    sx_rms = model.measures.measures_values[1]
                     mlj_rms = rms(yhat, ds.y[ds.tt[1].test])
 
-                    @show train_ratio, seed, num_round, eta
-                    @test sx_rms == mlj_rms
+                    @test isapprox(sxhat, yhat; rtol=1e-6)
+                    @test isapprox(sx_rms, mlj_rms; rtol=1e-6)
                 end
             end
         end
     end
 end
+
+# ---------------------------------------------------------------------------- #
+#                                  benchmarks                                  #
+# ---------------------------------------------------------------------------- #
+@btime begin
+    model, _, _ = symbolic_analysis(
+        Xc, yc;
+        model=(;type=:xgboost),
+        resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),
+        preprocess=(train_ratio=0.7, rng=Xoshiro(1)),
+        measures=(accuracy,),
+    )
+end
+# 7.188 ms (41827 allocations: 2.14 MiB)
+
+@btime begin
+    $(Xtrain, Xtest), $(ytrain, ytest) = partition((Xc, yc), 0.7, rng=Xoshiro(1), multi=true)
+    Tree = @load XGBoostClassifier pkg=XGBoost
+    tree = Tree()
+
+    mach = machine(tree, Xc, yc) |> MLJ.fit!
+    yhat = MLJ.predict_mode(mach, Xtest)
+    meas = accuracy(yhat, ytest)
+end
+# 14.866 ms (14557 allocations: 935.15 KiB)
+
+@btime begin
+    model, _, _ = symbolic_analysis(
+        Xr, yr;
+        model=(;type=:xgboost),
+        resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),
+        preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
+        measures=(rms,),
+    )
+end
+# 46.110 ms (553999 allocations: 20.85 MiB)
+
+@btime begin
+    $(Xtrain, Xtest), $(ytrain, ytest) = partition((Xr, yr), 0.7, rng=Xoshiro(1), multi=true)
+    Tree = @load XGBoostRegressor pkg=XGBoost
+    tree = Tree()
+
+    mach = machine(tree, Xr, yr) |> MLJ.fit!
+    yhat = MLJ.predict_mode(mach, Xtest)
+    meas = MLJ.rms(yhat, ytest)
+end
+# 113.354 ms (14865 allocations: 1.15 MiB)
