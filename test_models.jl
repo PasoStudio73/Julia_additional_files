@@ -248,45 +248,25 @@ end
 # 14.866 ms (14557 allocations: 935.15 KiB)
 
 @btime begin
-    model, _, _ = symbolic_analysis(
+    model = symbolic_analysis(
         Xr, yr;
         model=(;type=:xgboost),
-        resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),
+        resample = (type=Holdout, params=(; shuffle=true)),
         preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
         measures=(rms,),
     )
 end
-# 46.110 ms (553999 allocations: 20.85 MiB)
+# 44.339 ms (554001 allocations: 20.85 MiB)
 
 @btime begin
-    model, ds = prepare_dataset(
-        Xr, yr;
-        model=(;type=:xgboost),
-        resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),
-        preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
-        measures=(rms,),
-    )
-end
-# 30.197 μs (218 allocations: 73.41 KiB)
-
-@btime begin
-    model, mach, ds = train_test(
-        Xr, yr;
-        model=(;type=:xgboost),
-        resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),
-        preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
-        measures=(rms,),
-    )
-end
-# 43.402 ms (553855 allocations: 20.83 MiB)
-
-@btime begin
-    $(Xtrain, Xtest), $(ytrain, ytest) = partition((Xr, yr), 0.7, rng=Xoshiro(1), multi=true)
     Tree = @load XGBoostRegressor pkg=XGBoost
     tree = Tree()
-
-    mach = machine(tree, Xr, yr) |> MLJ.fit!
-    yhat = MLJ.predict_mode(mach, Xtest)
-    meas = MLJ.rms(yhat, ytest)
+    mlj_evo = evaluate(
+        tree, Xr, yr;
+        resampling=Holdout(shuffle=false),
+        measures=[rms],
+        per_observation=true,
+        verbosity=0
+    )
 end
-# 113.354 ms (14865 allocations: 1.15 MiB)
+# 90.617 ms (1982 allocations: 302.41 KiB)
