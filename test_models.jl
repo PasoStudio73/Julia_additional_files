@@ -1,18 +1,32 @@
 using Test
-using MLJ, SoleXplorer
 using DataFrames, Random
-using MLJXGBoostInterface
+
 using SoleModels
-using XGBoost
+using SoleLogics
+using SoleData
+using SoleBase
+using MultiData
+using SoleXplorer
 const SX = SoleXplorer
-const XGB = XGBoost
+
+using MLJ
+using MLJXGBoostInterface
 using DecisionTree
+const DT = DecisionTree
+using XGBoost
+const XGB = XGBoost
 
 Xr, yr = @load_boston
 Xr = DataFrame(Xr)
 
 Xc, yc = @load_iris
 Xc = DataFrame(Xc)
+
+Xts, yts = SoleData.load_arff_dataset("NATOPS")
+
+# ---------------------------------------------------------------------------- #
+#                    matrixtable based logiset: benchmarks                     #
+# ---------------------------------------------------------------------------- #
 
 # ---------------------------------------------------------------------------- #
 #                            classification models                             #
@@ -245,6 +259,28 @@ end
 # 46.110 ms (553999 allocations: 20.85 MiB)
 
 @btime begin
+    model, ds = prepare_dataset(
+        Xr, yr;
+        model=(;type=:xgboost),
+        resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),
+        preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
+        measures=(rms,),
+    )
+end
+# 30.197 μs (218 allocations: 73.41 KiB)
+
+@btime begin
+    model, mach, ds = train_test(
+        Xr, yr;
+        model=(;type=:xgboost),
+        resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),
+        preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
+        measures=(rms,),
+    )
+end
+# 43.402 ms (553855 allocations: 20.83 MiB)
+
+@btime begin
     $(Xtrain, Xtest), $(ytrain, ytest) = partition((Xr, yr), 0.7, rng=Xoshiro(1), multi=true)
     Tree = @load XGBoostRegressor pkg=XGBoost
     tree = Tree()
@@ -254,3 +290,56 @@ end
     meas = MLJ.rms(yhat, ytest)
 end
 # 113.354 ms (14865 allocations: 1.15 MiB)
+
+# ---------------------------------------------------------------------------- #
+#                             remove logiset debug                             #
+# ---------------------------------------------------------------------------- #
+model, ds = prepare_dataset(
+    Xr, yr;
+    model=(;type=:xgboost),
+    resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),
+    preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
+    measures=(rms,)
+)
+
+const SD = SoleData
+X = ds.X
+@btime dX = DataFrame(ds.X, ds.info.vnames)
+# 10.110 μs (61 allocations: 51.47 KiB)
+@btime mX = MLJ.table(ds.X; names=ds.info.vnames)
+# 1.249 μs (14 allocations: 1.30 KiB)
+
+dX = DataFrame(ds.X, ds.info.vnames)
+mX = MLJ.table(ds.X; names=ds.info.vnames)
+
+dS = SD.scalarlogiset(dX; silent=true, allow_propositional = true);
+mS = SD.scalarlogiset(mX; silent=true, allow_propositional = true);
+
+@btime SD.scalarlogiset(dX; silent=true, allow_propositional = true);
+# 5.397 ms (24826 allocations: 26.35 MiB)
+@btime SD.scalarlogiset(mX; silent=true, allow_propositional = true);
+# 4.079 ms (20282 allocations: 24.25 MiB)
+
+model, ds = prepare_dataset(
+    Xts, yts;
+    model=(;type=:modaldecisiontree),
+    resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),
+    preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
+    measures=(rms,)
+)
+
+a = false
+@btime a === false ? 1 : 0
+# 2.815 ns (0 allocations: 0 bytes)
+@btime a ? 1 : 0
+# 3.265 ns (0 allocations: 0 bytes)
+@btime !a ? 1 : 0
+# 14.892 ns (0 allocations: 0 bytes)
+
+dX = DataFrame(ds.X, ds.info.vnames)
+mX = MLJ.table(ds.X; names=ds.info.vnames)
+
+dS = SD.scalarlogiset(dX)
+mS = SD.scalarlogiset(mX)
+
+SD.matrix2dimensional(mX)
