@@ -10,7 +10,14 @@ Xc = DataFrame(Xc)
 # Xr, yr = @load_boston
 # Xr = DataFrame(Xr)
 
-# Xts, yts = SoleData.load_arff_dataset("NATOPS")
+Xts, yts = SoleData.load_arff_dataset("NATOPS")
+
+_, ds = prepare_dataset(
+    Xc, yc;
+    model=(;type=:decisiontree),
+    resample = (type=Holdout, params=(;shuffle=true)),
+    preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
+)
 
 @btime begin
     _, ds = prepare_dataset(
@@ -21,6 +28,7 @@ Xc = DataFrame(Xc)
     )
 end
 # 18.341 μs (308 allocations: 21.27 KiB)
+# 17.840 μs (309 allocations: 16.65 KiB)
 
 # ---------------------------------------------------------------------------- #
 #                                   references                                 #
@@ -332,7 +340,9 @@ symbols = [Symbol("symbol_$(i)_$(rand(1000:9999))") for i in 1:100]
 # Memory-efficient streaming approach (for huge datasets)
 symbols_generator(strings::AbstractVector{<:AbstractString})::Base.Generator{Vector{String}} = (Symbol(s) for s in strings)
 strings_generator(symbols) = (String(s) for s in symbols)
+symbols_generator(strings::MLJ.CategoricalArray) = (Symbol(s) for s in strings)
 
+a = symbols_generator(yc)
 
 @btime collect(symbols_generator($strings))
 # 7.298 μs (2 allocations: 928 bytes)
@@ -417,6 +427,94 @@ end
     return true
 end
 # 4.764 μs (62 allocations: 1.28 KiB)
+
+function check_row_consistency(X::DataFrame) 
+    ref_length = length.(X[!, 1])
+
+    for col in eachcol(X)
+        all(length.(col) == ref_length) || throw(ArgumentError("Elements within each row must have consistent dimensions"))
+    end
+end
+
+@btime check_row_consistency(Xc)
+# 386.926 ns (3 allocations: 1.27 KiB)
+
+@btime check_row_consistency(Xts)
+# 443.713 ns (4 allocations: 2.90 KiB)
+
+@btime begin
+    @eachrow! ds.X begin
+        any(el -> el isa AbstractArray, names(ds.X))
+    end
+end
+# 129.563 μs (2401 allocations: 65.64 KiB)
+# 44.684 μs (930 allocations: 39.08 KiB)
+
+function check_row_consistency(X::AbstractDataFrame) 
+    for row in eachrow(X)
+        # skip cols with only scalar values
+        all(eltype.(row)) <: AbstractArray || continue
+        
+        # # find first array element to use as reference
+        # ref_idx = findfirst(el -> el isa AbstractArray, col)
+        # ref_idx === nothing && continue
+        
+        # ref_size = size(col[ref_idx])
+        
+        # # check if any array element has different size (short-circuit)
+        # if any(col) do el
+        #         el isa AbstractArray && size(el) != ref_size
+        #     end
+        #     return false
+        # end
+    end
+    return true
+end
+
+# Even more optimized version with @inbounds
+function check_row_consistency_fast(X::AbstractDataFrame) 
+    for col in eachcol(X)
+        # Check eltype first
+        eltype(col) <: AbstractArray || continue
+        
+        isempty(col) && continue
+        
+        # Get reference size from first element
+        @inbounds ref_size = size(col[1])
+        
+        # Check remaining elements with bounds checking disabled
+        @inbounds for i in 2:length(col)
+            size(col[i]) != ref_size && return false
+        end
+    end
+    return true
+end
+
+# Type-stable version that avoids dynamic dispatch
+function check_row_consistency_typed(X::AbstractDataFrame) 
+    for col in eachcol(X)
+        _check_column_consistency(col)
+    end
+    return true
+end
+
+@inline function _check_column_consistency(col::AbstractVector{T}) where T
+    T <: AbstractArray || return true
+    
+    isempty(col) && return true
+    
+    @inbounds ref_size = size(col[1])
+    @inbounds for i in 2:length(col)
+        size(col[i]) != ref_size && return false
+    end
+    return true
+end
+
+@btime check_row_consistency(Xc)
+# 545.723 ns (0 allocations: 0 bytes)
+
+@btime check_row_consistency(Xts)
+# 24.580 μs (48 allocations: 768 bytes)
 
 
 
