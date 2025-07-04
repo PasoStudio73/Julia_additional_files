@@ -7,22 +7,35 @@ const SX = SoleXplorer
 Xc, yc = @load_iris
 Xc = DataFrame(Xc)
 
-# Xr, yr = @load_boston
-# Xr = DataFrame(Xr)
+Xr, yr = @load_boston
+Xr = DataFrame(Xr)
+
+Xts, yts = SoleData.load_arff_dataset("NATOPS")
 
 Tree = @load DecisionTreeClassifier pkg=DecisionTree
 tree = Tree()
+a = MLJ.machine(tree, Xc, yc; cache=true)
+b = MLJ.machine(tree, Xr, yr; cache=true)
+c = MLJ.machine(tree, Xts, yts; cache=true)
 
-@show typeof(tree)
-@show typeof(Xc)
-@show typeof(yc)
+@btime a = MLJ.machine(tree, Xc, yc; cache=true)
+# 10.735 μs (51 allocations: 1.94 KiB)
+@btime a = MLJ.machine(tree, Xc, yc; cache=false)
+# 10.686 μs (51 allocations: 1.94 KiB)
 
-e1f = evaluate(
+e = evaluate(
     tree, Xc, yc;
-    resampling=CV(shuffle=false),
+    resampling=CV(shuffle=true),
     measures=[log_loss, accuracy],
     per_observation=false,
     verbosity=0
+)
+
+model, mach, ds = symbolic_analysis(
+    Xc, yc;
+    model=(;type=:decisiontree),
+    resample = (type=CV, params=(;shuffle=true)),
+    measures=(log_loss, accuracy)
 )
 
 @btime begin
@@ -46,104 +59,88 @@ end
         measures=(log_loss, accuracy)
     )
 end
+# 3.455 ms (33731 allocations: 1.93 MiB)
 
-# Xts, yts = SoleData.load_arff_dataset("NATOPS")
+@btime args = source((Xc, yc))
+# 3.989 μs (22 allocations: 832 bytes)
 
-_, ds = prepare_dataset(
-    Xc, yc;
-    model=(;type=:decisiontree),
-    resample = (type=Holdout, params=(;shuffle=true)),
-    preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
-)
+#######################################################################
+using  SoleBase: Label, CLabel, RLabel, XGLabel
+import MLJ: MLJType
 
+abstract type AbstractSource     <: MLJType        end
+abstract type AbstractSoleSource <: AbstractSource end
 
-
-using StaticArrays
-
-@btime begin
-    a = nrow(Xc)
-    b = ncol(Xc)
-    c = Array(Xc)
-    D = SizedArray{Tuple{a,b}}(c)
+struct TableSource{T<:DataFrame} <: AbstractSoleSource
+    data :: T
 end
-# 4.008 μs (16 allocations: 5.32 KiB)
 
-@btime begin
-    D = SizedArray{Tuple{nrow(Xc),ncol(Xc)}}(Array(Xc))
+struct VectorSource{S<:Label, T<:AbstractVector{S}} <: AbstractSoleSource
+    data :: T
 end
-# 4.000 μs (16 allocations: 5.32 KiB)
 
-@btime begin
-    D = Array(Xc)
+source(X::T) where {T<:DataFrame} = TableSource{T}(X)
+source(X::T) where {S, T<:AbstractVector{S}} = VectorSource{S,T}(X)
+
+# source(Xs::Source; args...) = Xs
+
+Base.isempty(X::AbstractSoleSource)  = isempty(X.data)
+
+nrows_at_source(X::TableSource)  = nrows(X.data)
+nrows_at_source(X::VectorSource) = length(X.data)
+
+# select rows in a TableSource
+# examples:
+# ts(rows=1:10)
+# ts(rows=:)    # select all rows
+function (X::TableSource)(; rows=:)
+    rows == (:) && return X.data
+    return @views Xc[rows, :]
 end
-# 1.724 μs (5 allocations: 4.85 KiB)
-
-# check_row_consistency
-@btime begin
-    for row in eachrow(Xc)
-        # skip cols with only scalar values
-        any(el -> el isa AbstractArray, row) || continue
-        
-        # find first array element to use as reference
-        ref_idx = findfirst(el -> el isa AbstractArray, row)
-        ref_idx === nothing && continue
-        
-        ref_size = size(row[ref_idx])
-        
-        # check if any array element has different size (short-circuit)
-        if any(row) do el
-                el isa AbstractArray && size(el) != ref_size
-            end
-            return false
-        end
-    end
-    return true
+# select elements in a VectorSource
+function (X::VectorSource)(; rows=:)
+    rows == (:) && return X.data
+    return @views X.data[rows]
 end
-# 141.105 μs (2401 allocations: 65.64 KiB)
 
-D = SizedArray{Tuple{nrow(Xc),ncol(Xc)}}(Array(Xc))
-@btime begin
-    for row in eachrow(D)
-        # skip cols with only scalar values
-        any(el -> el isa AbstractArray, row) || continue
-        
-        # find first array element to use as reference
-        ref_idx = findfirst(el -> el isa AbstractArray, row)
-        ref_idx === nothing && continue
-        
-        ref_size = size(row[ref_idx])
-        
-        # check if any array element has different size (short-circuit)
-        if any(row) do el
-                el isa AbstractArray && size(el) != ref_size
-            end
-            return false
-        end
-    end
-    return true
-end
-# 51.758 μs (601 allocations: 25.81 KiB)
+color(::AbstractSoleSource) = :yellow
 
-M = Array(Xc)
-@btime begin
-    for row in eachrow(M)
-        # skip cols with only scalar values
-        any(el -> el isa AbstractArray, row) || continue
-        
-        # find first array element to use as reference
-        ref_idx = findfirst(el -> el isa AbstractArray, row)
-        ref_idx === nothing && continue
-        
-        ref_size = size(row[ref_idx])
-        
-        # check if any array element has different size (short-circuit)
-        if any(row) do el
-                el isa AbstractArray && size(el) != ref_size
-            end
-            return false
-        end
-    end
-    return true
-end
-# 36.963 μs (601 allocations: 28.16 KiB)
+### test ############################################################
+at = source(a.args[1].data)
+am = MLJ.source(a.args[1].data)
+@btime at = source(a.args[1].data)
+# 291.879 ns (1 allocation: 16 bytes)
+@btime am = MLJ.source(a.args[1].data)
+# 3.849 μs (17 allocations: 640 bytes)
+@btime at(rows=1:10)
+# 112.297 ns (2 allocations: 80 bytes)
+@btime am(rows=1:10)
+# 1.589 μs (34 allocations: 1.98 KiB)
 
+at = source(a.args[2].data)
+am = MLJ.source(a.args[2].data)
+@btime at = source(a.args[2].data)
+# 297.239 ns (1 allocation: 16 bytes)
+@btime am = MLJ.source(a.args[2].data)
+# 519.812 ns (1 allocation: 32 bytes)
+@btime at(el=1:10)
+# 155.728 ns (10 allocations: 656 bytes)
+# con @views: 23.548 ns (1 allocation: 48 bytes)
+@btime am(rows=1:10)
+# 180.216 ns (11 allocations: 688 bytes)
+
+### implemented
+at = SX.source(a.args[1].data)
+am = MLJ.source(a.args[1].data)
+at = SX.source(a.args[2].data)
+am = MLJ.source(a.args[2].data)
+
+at = SX.source(b.args[1].data)
+am = MLJ.source(b.args[1].data)
+at = SX.source(b.args[2].data)
+am = MLJ.source(b.args[2].data)
+
+at = SX.source(c.args[1].data)
+am = MLJ.source(c.args[1].data)
+at = SX.source(c.args[2].data)
+am = MLJ.source(c.args[2].data)
