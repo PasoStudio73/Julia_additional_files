@@ -144,3 +144,7 @@ at = SX.source(c.args[1].data)
 am = MLJ.source(c.args[1].data)
 at = SX.source(c.args[2].data)
 am = MLJ.source(c.args[2].data)
+
+Xt = SX.source(Xc)
+yt = SX.source(yc)
+
