@@ -15,7 +15,7 @@ Xts, yts = SoleData.load_arff_dataset("NATOPS")
 
 # model, mach, ds = symbolic_analysis(
 a = symbolic_analysis(
-    Xc, yc;
+    Xts, yts;
     model=(;type=modaldecisiontree, params=(;conditions=[maximum])),
     resample = (type=CV, params=(;shuffle=true)),
     measures=(log_loss, accuracy),
