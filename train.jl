@@ -57,8 +57,8 @@ end
 # 2.384 μs (156 allocations: 6.12 KiB)
 
 @btime begin
-    @views for i in 1:n_folds
-        X, y = get_X(model), get_y(model)
+    @inbounds @views for i in 1:n_folds
+        X, y = SX.get_X(model), SX.get_y(model)
         train, test = SX.get_train(model.pidxs[i]), SX.get_test(model.pidxs[i])
         # X_train , y_train = X[train, :], y[train]
         X_test, y_test = X[test, :], y[test]
