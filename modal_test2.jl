@@ -13,7 +13,7 @@ Xr = DataFrame(Xr)
 
 Xts, yts = SoleData.load_arff_dataset("NATOPS")
 
-a = prepare_dataset(
+a = setup_dataset(
         Xc, yc;
         model=DecisionTreeClassifier(),
         win=AdaptiveWindow(nwindows=3, relative_overlap=0.1),
@@ -21,7 +21,7 @@ a = prepare_dataset(
 )
 
 @btime begin
-    a = prepare_dataset(
+    a = setup_dataset(
         Xts, yts;
         model=DecisionTreeClassifier(),
         win=AdaptiveWindow(nwindows=3, relative_overlap=0.1),

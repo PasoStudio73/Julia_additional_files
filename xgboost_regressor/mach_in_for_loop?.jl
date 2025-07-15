@@ -46,7 +46,7 @@ tree = Tree()
     for seed in 1:25
         for fraction_train in 0.5:0.1:0.9
             Random.seed!(1234)
-            _, ds = prepare_dataset(
+            _, ds = setup_dataset(
                 Xc, yc;
                 model=(;type=:decisiontree),
                 # don't pass fraction_ratio to resample, it goes to preprocess
@@ -70,7 +70,7 @@ end
     for seed in 1:25
         for nfolds in 2:25
             Random.seed!(1234)
-            _, ds = prepare_dataset(
+            _, ds = setup_dataset(
                 Xc, yc;
                 model=(;type=:decisiontree),
                 resample = (type=CV, params=(;nfolds, shuffle=true)),
@@ -94,7 +94,7 @@ end
     for seed in 1:25
         for nfolds in 2:25
             Random.seed!(1234)
-            _, ds = prepare_dataset(
+            _, ds = setup_dataset(
                 Xc, yc;
                 model=(;type=:decisiontree),
                 resample = (type=StratifiedCV, params=(;nfolds, shuffle=true)),
@@ -118,7 +118,7 @@ end
     for seed in 1:25
         for nfolds in 2:25
             Random.seed!(1234)
-            _, ds = prepare_dataset(
+            _, ds = setup_dataset(
                 Xc, yc;
                 model=(;type=:decisiontree),
                 resample = (type=TimeSeriesCV, params=(;nfolds)),
@@ -165,7 +165,7 @@ mljm = evaluate(
 Tree = @load DecisionTreeClassifier pkg=DecisionTree
 tree = Tree()
 Random.seed!(1234)
-_, ds = prepare_dataset(
+_, ds = setup_dataset(
     Xc, yc;
     model=(;type=:decisiontree),
     resample = (type=CV, params=(;nfolds, shuffle=true)),

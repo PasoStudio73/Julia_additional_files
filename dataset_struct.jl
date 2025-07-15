@@ -12,7 +12,7 @@ Xc = DataFrame(Xc)
 
 Xts, yts = SoleData.load_arff_dataset("NATOPS")
 
-_, ds = prepare_dataset(
+_, ds = setup_dataset(
     Xc, yc;
     model=(;type=:decisiontree),
     resample = (type=Holdout, params=(;shuffle=true)),
@@ -20,7 +20,7 @@ _, ds = prepare_dataset(
 )
 
 @btime begin
-    _, ds = prepare_dataset(
+    _, ds = setup_dataset(
         Xc, yc;
         model=(;type=:decisiontree),
         resample = (type=Holdout, params=(;shuffle=true)),
@@ -68,14 +68,14 @@ end
     a = c(b)
 end
 
-_, ds = prepare_dataset(
+_, ds = setup_dataset(
     Xc, yc;
     model=(;type=:xgboost),
     resample = (type=Holdout, params=(;shuffle=true)),
     preprocess=(;train_ratio=0.7, rng=Xoshiro(1)),
 )
 @btime begin
-    _, ds = prepare_dataset(
+    _, ds = setup_dataset(
         Xc, yc;
         model=(;type=:xgboost),
         resample = (type=Holdout, params=(;shuffle=true)),

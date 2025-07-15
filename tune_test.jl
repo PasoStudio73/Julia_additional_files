@@ -39,14 +39,14 @@ self_tuning_tree = TunedModel(
 mach = machine(self_tuning_tree, Xr, yr)
 fit!(mach, verbosity=0)
 
-modelr = prepare_dataset(
+modelr = setup_dataset(
     Xr, yr;
     model,
     resample=(;rng=Xoshiro(1234)),
     tuning=(tuning=Grid(resolution=10),resampling=CV(nfolds=3),range=r1,measure=rms)
 )
 
-modelc = prepare_dataset(
+modelc = setup_dataset(
     Xc, yc;
     model,
     resample=(;rng=Xoshiro(1234)),
@@ -72,7 +72,7 @@ self_tuning_tree = TunedModel(
     measure=(l1, rms)
 )
 
-modelc = prepare_dataset(
+modelc = setup_dataset(
     Xc, yc;
     model=DecisionTreeClassifier(),
     resample=(;rng=Xoshiro(1234)),

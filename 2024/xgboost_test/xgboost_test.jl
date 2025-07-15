@@ -22,7 +22,7 @@ X = X[chosen_rows, chosen_cols]
 y = y[chosen_rows]
 
 m = SoleXplorer.XGBoostClassifierModel()
-ds = prepare_dataset(X, y, m)
+ds = setup_dataset(X, y, m)
 
 # MLJXGBoostInterface
 classifier = MLJXGBoostInterface.XGBoostClassifier(num_round=1, max_depth=3, objective="multi:softprob")

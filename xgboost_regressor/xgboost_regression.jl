@@ -19,7 +19,7 @@ Xc = DataFrame(Xc)
 @testset "data validation" begin
     for train_ratio in 0.5:0.1:0.9
         for seed in 1:40
-            _, ds = prepare_dataset(Xc, yc; preprocess=(;train_ratio, rng=Xoshiro(seed)))
+            _, ds = setup_dataset(Xc, yc; preprocess=(;train_ratio, rng=Xoshiro(seed)))
             X_train, y_train = ds.X[ds.tt[1].train, :], ds.y[ds.tt[1].train]
             X_test, y_test = ds.X[ds.tt[1].test, :], ds.y[ds.tt[1].test]
 
@@ -53,7 +53,7 @@ end
 @testset "data validation" begin
     for train_ratio in 0.5:0.1:0.9
         for seed in 1:40
-            _, ds = prepare_dataset(Xr, yr; preprocess=(;train_ratio, rng=Xoshiro(seed)))
+            _, ds = setup_dataset(Xr, yr; preprocess=(;train_ratio, rng=Xoshiro(seed)))
             X_train, y_train = ds.X[ds.tt[1].train, :], ds.y[ds.tt[1].train]
             X_test, y_test = ds.X[ds.tt[1].test, :], ds.y[ds.tt[1].test]
 
@@ -80,7 +80,7 @@ end
 # ---------------------------------------------------------------------------- #
 #                     build xgboost regressor from scratch                     #
 # ---------------------------------------------------------------------------- #
-model, ds = prepare_dataset(Xr, yr; model=(;type=:xgboost), preprocess=(;train_ratio=0.7, rng=Xoshiro(1)))
+model, ds = setup_dataset(Xr, yr; model=(;type=:xgboost), preprocess=(;train_ratio=0.7, rng=Xoshiro(1)))
 X_train, y_train = ds.X[ds.tt[1].train, :], ds.y[ds.tt[1].train]
 X_test, y_test = ds.X[ds.tt[1].test, :], ds.y[ds.tt[1].test]
 

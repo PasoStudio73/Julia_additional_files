@@ -12,9 +12,9 @@ Xr = DataFrame(Xr)
 
 Xts, yts = SoleData.load_arff_dataset("NATOPS")
 
-modelc  = prepare_dataset(Xc, yc)
-modelr  = prepare_dataset(Xr, yr; model=XGBoostRegressor())
-modelts = prepare_dataset(Xts, yts; model=ModalDecisionTree())
+modelc  = setup_dataset(Xc, yc)
+modelr  = setup_dataset(Xr, yr; model=XGBoostRegressor())
+modelts = setup_dataset(Xts, yts; model=ModalDecisionTree())
 
 model = modelc
 

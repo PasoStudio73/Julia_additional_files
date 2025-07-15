@@ -13,10 +13,44 @@ Xc = DataFrame(Xc)
 Xr, yr = @load_boston
 Xr = DataFrame(Xr)
 
+@btime begin
+modelc = symbolic_analysis(
+    Xc, yc;
+    model=DecisionTreeClassifier(),
+    resample=(;type=CV(shuffle=true)),
+    measures=(log_loss, accuracy)
+);
+end
+# 3.492 ms (36427 allocations: 2.05 MiB)
+
+@btime begin
+    dsc = symbolic_analysis(
+        Xc, yc;
+        model=(;type=:decisiontree),
+        resample=(;type=CV, params=(;shuffle=true)),
+        measures=(log_loss, accuracy),
+    )
+end
+# 3.712 ms (33848 allocations: 1.94 MiB)
+
+@btime begin
+Tree = @load DecisionTreeClassifier pkg=DecisionTree
+tree = Tree()
+e1t = evaluate(
+    tree, Xc, yc;
+    resampling=CV(shuffle=true),
+    measures=[log_loss, accuracy],
+    per_observation=true,
+    verbosity=0
+)
+e1t
+end
+# 1.780 ms (10705 allocations: 658.06 KiB)
+
 # ---------------------------------------------------------------------------- #
 #                              solexplorer setup                               #
 # ---------------------------------------------------------------------------- #
-dsc = prepare_dataset(
+dsc = setup_dataset(
     Xc, yc;
     model=(;type=:decisiontree),
     preprocess=(;train_ratio=0.9, rng=Xoshiro(1)),
@@ -24,21 +58,21 @@ dsc = prepare_dataset(
 )
 
 @btime begin
-    dsc = prepare_dataset(
+    dsc = setup_dataset(
         Xc, yc;
         model=(;type=:decisiontree),
         preprocess=(;rng=Xoshiro(1)),
     )
 end
 
-dsc = prepare_dataset(
+dsc = setup_dataset(
     Xc, yc;
     model=(;type=:decisiontree),
     resample=(;type=CV),
     preprocess=(;rng=Xoshiro(1))
 )
 
-dsr = prepare_dataset(
+dsr = setup_dataset(
     Xr, yr;
     model=(;type=:decisiontree),
     preprocess=(;rng=Xoshiro(1))
@@ -458,7 +492,7 @@ mach = machine(tree, Xc, yc; cache=true)
 
 e1 = evaluate!(
     mach;
-    resampling=CV(shuffle=true),
+    resampling=(shuffle=true),
     verbosity=0
 )
 

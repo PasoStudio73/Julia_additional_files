@@ -27,7 +27,7 @@ a = false
 # ---------------------------------------------------------------------------- #
 #                    matrixtable based logiset: benchmarks                     #
 # ---------------------------------------------------------------------------- #
-model, ds = prepare_dataset(
+model, ds = setup_dataset(
     Xr, yr;
     model=(;type=:xgboost),
     resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),
@@ -60,7 +60,7 @@ mS = SoleData.scalarlogiset(mX; silent=true, allow_propositional = true);
 # 3.655 ms (20284 allocations: 24.25 MiB)
 
 # ---------------------------------------------------------------------------- #
-model, ds = prepare_dataset(
+model, ds = setup_dataset(
     Xts, yts;
     model=(;type=:modaldecisiontree),
     resample = (type=Holdout, params=(shuffle=true, rng=Xoshiro(1))),

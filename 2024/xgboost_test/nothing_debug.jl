@@ -27,7 +27,7 @@ models=(type=:xgboost_classifier,
     )
 modelsets = validate_modelset(models, typeof(y), nothing, preprocess)
 m = modelsets[1]
-ds = prepare_dataset(X, y, m)
+ds = setup_dataset(X, y, m)
 classifier = getmodel(m)
 mach = fitmodel(m, classifier, ds)
 trees        = XGB.trees(mach.fitresult[1])
