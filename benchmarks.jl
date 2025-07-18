@@ -1,7 +1,6 @@
 using Test
-using MLJ, SoleXplorer
-using DataFrames, Random
-using SoleData
+using SoleXplorer
+using MLJ, DataFrames, Random
 const SX = SoleXplorer
 
 Xc, yc = @load_iris
@@ -10,38 +9,44 @@ Xc = DataFrame(Xc)
 Xr, yr = @load_boston
 Xr = DataFrame(Xr)
 
-Xts, yts = SoleData.load_arff_dataset("NATOPS")
+Xts, yts = load_arff_dataset("NATOPS")
 
 # ---------------------------------------------------------------------------- #
 #                       Sole vs MLJ machine & fit setup                        #
 # ---------------------------------------------------------------------------- #
-dsc = setup_dataset(
+dsc = symbolic_analysis(
     Xc, yc,
     model=DecisionTreeClassifier(),
-    resample=(type=Holdout(shuffle=true), train_ratio=0.7, rng=Xoshiro(1))
+    resample=Holdout(shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy, kappa)
 )
 
 @btime begin
-    setup_dataset(
-        $Xc, $yc,
-        model=$DecisionTreeClassifier(),
-        resample=(type=$Holdout(shuffle=true), train_ratio=0.7, rng=$Xoshiro(1))
+    symbolic_analysis(
+        Xc, yc,
+        model=DecisionTreeClassifier(),
+        resample=Holdout(shuffle=true),
+        train_ratio=0.7,
+        rng=Xoshiro(1),
+        measures=(accuracy, kappa)
     )
 end
-# 18.171 μs (145 allocations: 8.97 KiB)
-
-Tree = @load DecisionTreeClassifier pkg=DecisionTree verbosity=0
-tree = Tree()
-train, test = MLJ.partition(eachindex(yc), 0.7);
-mach = machine(tree, Xc, yc)
+# 468.033 μs (3446 allocations: 250.73 KiB)
 
 @btime begin
     Tree = @load DecisionTreeClassifier pkg=DecisionTree verbosity=0
     tree = Tree()
-    train, test = MLJ.partition(eachindex($yc), 0.7);
-    mach = machine(tree, $Xc, $yc)  
+    evaluate(
+        tree, Xc, yc;
+        resampling=Holdout(shuffle=true),
+        measures=[accuracy, kappa],
+        per_observation=true,
+        verbosity=0
+    )
 end
-# 58.410 μs (308 allocations: 23.20 KiB)
+# 394.518 μs (1900 allocations: 118.90 KiB)
 
 solemc = train_test(dsc)
 
