@@ -70,7 +70,7 @@ end
 # alleggerito il primo apply
 # 1.477 s (19380393 allocations: 645.15 MiB)
 # 936.445 ms (11692285 allocations: 461.07 MiB)
-# 894.544 ms (11026522 allocations: 439.58 MiB)
+# 892.104 ms (10975930 allocations: 437.26 MiB)
 
 @btime begin
     Tree = @load RandomForestRegressor pkg=DecisionTree verbosity=0
@@ -140,8 +140,8 @@ end
 # senza apply 456.737 ms (1821494 allocations: 161.18 MiB)
 
 ds = setup_dataset(
-    Xr, yr,
-    model=RandomForestRegressor(),
+    Xc, yc,
+    model=DecisionTreeClassifier(),
     resample=Holdout(shuffle=true),
     train_ratio=0.7,
     rng=Xoshiro(1),
@@ -153,11 +153,12 @@ MLJ.fit!(ds.mach, rows=train, verbosity=0)
 featurenames = MLJ.report(ds.mach).features
 
 solem = SX.solemodel(MLJ.fitted_params(ds.mach).forest; featurenames)
-SX.propositional_apply!(solem, X_test, y_test)
+s = SX.propositional_solemodel(MLJ.fitted_params(ds.mach).forest; featurenames)
+SX.propositional_apply!(s, X_test, y_test)
 
 ds = symbolic_analysis(
     Xc, yc,
-    model=SX.RandomForestClassifier(n_trees=2),
+    model=SX.DecisionTreeClassifier(),
     resample=CV(nfolds=10, shuffle=true),
     train_ratio=0.7,
     rng=Xoshiro(1),
