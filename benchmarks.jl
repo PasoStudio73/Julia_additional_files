@@ -11,35 +11,6 @@ Xr = DataFrame(Xr)
 
 # Xts, yts = load_arff_dataset("NATOPS")
 
-@btime begin
-    evaluate(
-        tree, Xr, yr;
-        resampling=CV(nfolds=10,shuffle=true),
-        measures=rms,
-        per_observation=true,
-        verbosity=0,
-        cache=true
-    )
-end
-# 523.425 ms (1825099 allocations: 161.95 MiB)
-@btime begin
-    evaluate(
-        tree, Xr, yr;
-        resampling=CV(nfolds=10,shuffle=true),
-        measures=rms,
-        per_observation=true,
-        verbosity=0,
-        cache=false
-    )
-end
-# 544.962 ms (1823246 allocations: 162.35 MiB)
-
-y=SX.get_y(ds)
-@btime nrows = MLJ.MLJBase.nrows(y)
-# 14.929 ns (0 allocations: 0 bytes)
-@btime nrows = length(y)
-# 17.043 ns (0 allocations: 0 bytes)
-
 # ---------------------------------------------------------------------------- #
 #                       Sole vs MLJ machine & fit setup                        #
 # ---------------------------------------------------------------------------- #
@@ -80,7 +51,7 @@ end
 @btime begin
     symbolic_analysis(
         Xr, yr,
-        model=RandomForestRegressor(n_trees=100),
+        model=SX.RandomForestRegressor(n_trees=100),
         resample=CV(nfolds=10, shuffle=true),
         train_ratio=0.7,
         rng=Xoshiro(1),
@@ -88,6 +59,18 @@ end
     )
 end
 # 4.882 s (30678086 allocations: 1.27 GiB)
+# 1.394 s (19436815 allocations: 653.31 MiB)
+# senza apply
+# 1.056 s (10897211 allocations: 398.17 MiB)
+
+# rifaccio DecisionTreeExt
+# 1.553 s (19437247 allocations: 653.34 MiB)
+# tipizzazione
+# 1.587 s (19436765 allocations: 653.31 MiB)
+# alleggerito il primo apply
+# 1.477 s (19380393 allocations: 645.15 MiB)
+# 936.445 ms (11692285 allocations: 461.07 MiB)
+# 894.544 ms (11026522 allocations: 439.58 MiB)
 
 @btime begin
     Tree = @load RandomForestRegressor pkg=DecisionTree verbosity=0
@@ -156,19 +139,27 @@ end
 # 4.083 s (30724331 allocations: 1.27 GiB)
 # senza apply 456.737 ms (1821494 allocations: 161.18 MiB)
 
-# function apply
-i = 1
-train, test = SX.get_train(ds.pidxs[i]), SX.get_test(ds.pidxs[i])
-X_test, y_test = get_X(ds)[test, :], get_y(ds)[test]
-
-featurenames = MLJ.report(ds.mach).features
-solem        = SX.solemodel(MLJ.fitted_params(ds.mach).forest; featurenames)
-
-dsr = symbolic_analysis(
+ds = setup_dataset(
     Xr, yr,
     model=RandomForestRegressor(),
     resample=Holdout(shuffle=true),
     train_ratio=0.7,
     rng=Xoshiro(1),
-    measures=(rms,)
+)
+i = 1
+train, test = SX.get_train(ds.pidxs[i]), SX.get_test(ds.pidxs[i])
+X_test, y_test = SX.get_X(ds)[test, :], SX.get_y(ds)[test]
+MLJ.fit!(ds.mach, rows=train, verbosity=0)
+featurenames = MLJ.report(ds.mach).features
+
+solem = SX.solemodel(MLJ.fitted_params(ds.mach).forest; featurenames)
+SX.propositional_apply!(solem, X_test, y_test)
+
+ds = symbolic_analysis(
+    Xc, yc,
+    model=SX.RandomForestClassifier(n_trees=2),
+    resample=CV(nfolds=10, shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy,)
 )
