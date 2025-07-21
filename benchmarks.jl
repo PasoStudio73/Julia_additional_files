@@ -9,7 +9,7 @@ Xc = DataFrame(Xc)
 Xr, yr = @load_boston
 Xr = DataFrame(Xr)
 
-# Xts, yts = load_arff_dataset("NATOPS")
+Xts, yts = load_arff_dataset("NATOPS")
 
 dsc = symbolic_analysis(
     Xc, yc,
