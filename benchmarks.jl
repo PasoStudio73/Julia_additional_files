@@ -11,6 +11,75 @@ Xr = DataFrame(Xr)
 
 # Xts, yts = load_arff_dataset("NATOPS")
 
+dsc = symbolic_analysis(
+    Xc, yc,
+    model=SX.XGBoostClassifier(),
+    resample=CV(nfolds=10, shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy,)
+)
+
+dsr = symbolic_analysis(
+    Xr, yr,
+    model=SX.XGBoostRegressor(),
+    resample=CV(nfolds=10, shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(rms,)
+)
+
+@btime begin
+    dsc = symbolic_analysis(
+    Xc, yc,
+    model=SX.XGBoostClassifier(),
+    resample=CV(nfolds=10, shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy,)
+)
+end
+# 383.803 ms (2013184 allocations: 107.30 MiB)
+# 387.927 ms (2187854 allocations: 107.35 MiB)
+
+@btime begin
+dsr = symbolic_analysis(
+    Xr, yr,
+    model=SX.XGBoostRegressor(),
+    resample=CV(nfolds=10, shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(rms,)
+)
+end
+# 2.888 s (22959657 allocations: 903.24 MiB)
+
+@btime begin
+    Tree = @load XGBoostClassifier pkg=XGBoost verbosity=0
+    tree = Tree()
+    evaluate(
+        tree, Xc, yc;
+        resampling=CV(nfolds=10, shuffle=true),
+        measures=[accuracy,],
+        per_observation=true,
+        verbosity=0
+    )
+end
+# 82.527 ms (16956 allocations: 1.08 MiB)
+
+@btime begin
+    Tree = @load XGBoostRegressor pkg=XGBoost verbosity=0
+    tree = Tree()
+    evaluate(
+        tree, Xr, yr;
+        resampling=CV(nfolds=10, shuffle=true),
+        measures=[rms,],
+        per_observation=true,
+        verbosity=0
+    )
+end
+# 986.137 ms (14683 allocations: 2.56 MiB)
+
 # ---------------------------------------------------------------------------- #
 #                       Sole vs MLJ machine & fit setup                        #
 # ---------------------------------------------------------------------------- #
@@ -141,7 +210,7 @@ end
 
 ds = setup_dataset(
     Xc, yc,
-    model=DecisionTreeClassifier(),
+    model=XGBoostClassifier(),
     resample=Holdout(shuffle=true),
     train_ratio=0.7,
     rng=Xoshiro(1),
@@ -150,17 +219,9 @@ i = 1
 train, test = SX.get_train(ds.pidxs[i]), SX.get_test(ds.pidxs[i])
 X_test, y_test = SX.get_X(ds)[test, :], SX.get_y(ds)[test]
 MLJ.fit!(ds.mach, rows=train, verbosity=0)
-featurenames = MLJ.report(ds.mach).features
-
-solem = SX.solemodel(MLJ.fitted_params(ds.mach).forest; featurenames)
-s = SX.propositional_solemodel(MLJ.fitted_params(ds.mach).forest; featurenames)
-SX.propositional_apply!(s, X_test, y_test)
-
-ds = symbolic_analysis(
-    Xc, yc,
-    model=SX.DecisionTreeClassifier(),
-    resample=CV(nfolds=10, shuffle=true),
-    train_ratio=0.7,
-    rng=Xoshiro(1),
-    measures=(accuracy,)
-)
+trees        = SX.XGBoost.trees(ds.mach.fitresult[1])
+encoding     = SX.get_encoding(ds.mach.fitresult[2])
+classlabels  = string.(SX.get_classlabels(encoding))
+featurenames = ds.mach.report.vals[1].features
+solem        = SX.solemodel(trees, X_test, y_test; classlabels, featurenames)
+propositional_apply!(solem, mapcols(col -> Float32.(col), X), y)
