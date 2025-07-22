@@ -1,6 +1,7 @@
 using Test
 using SoleXplorer
-using MLJ, DataFrames, Random
+using MLJ
+using DataFrames, Random
 const SX = SoleXplorer
 
 Xc, yc = @load_iris
@@ -10,6 +11,49 @@ Xr, yr = @load_boston
 Xr = DataFrame(Xr)
 
 Xts, yts = load_arff_dataset("NATOPS")
+
+# I'm easy like sunday morning
+modelc = symbolic_analysis(Xc, yc)
+@test modelc isa SX.ModelSet
+
+# ---------------------------------------------------------------------------- #
+#                               usage example #1                               #
+# ---------------------------------------------------------------------------- #
+range = SX.range(:min_purity_increase; lower=0.001, upper=1.0, scale=:log)
+dsc = setup_dataset(
+    Xc, yc;
+    model=DecisionTreeClassifier(),
+    resample=CV(nfolds=5, shuffle=true),
+    rng=Xoshiro(1),
+    tuning=(tuning=Grid(resolution=10), resampling=CV(nfolds=3), range, measure=accuracy, repeats=2)    
+)
+solemc = train_test(dsc)
+modelc = symbolic_analysis(
+    dsc, solemc;
+    # extractor=InTreesRuleExtractor(),
+    measures=(accuracy, log_loss, confusion_matrix, kappa)
+)
+@test modelc isa SX.ModelSet
+
+function _symbolic_analysis(
+    ds::EitherDataSet,
+    solem::SoleModel;
+    extractor::Union{Nothing,RuleExtractor}=nothing,
+    measures::Tuple{Vararg{FussyMeasure}}=(),
+)::ModelSet
+    rules = isnothing(extractor)  ? nothing : begin
+        # TODO propaga rng, dovrai fare intrees mutable struct
+        extractrules(extractor, ds, solem)
+    end
+
+    measures = isempty(measures) ? nothing : begin
+        y_test = get_y_test(ds)
+        # all_classes = unique(Iterators.flatten(y_test))
+        eval_measures(ds, solem, measures, y_test)
+    end
+
+    return ModelSet(ds, solem; rules, measures)
+end
 
 dsc = symbolic_analysis(
     Xc, yc,
