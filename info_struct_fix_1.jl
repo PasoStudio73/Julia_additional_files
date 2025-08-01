@@ -166,12 +166,14 @@ sole_rfr = solemodels(model_rfr)
 
 const Optional{T} = Union{T, Nothing}
 const OptCallable = Optional{Base.Callable}
+# const OptVecReal = Optional{Vector{<:Real}}
 # const OptReal = Optional{Real}
 # const OptAbstractVector{T} = Optional{AbstractVector{T}}
 
 const Branch_or_Leaf{O} = Union{Branch{O}, LeafModel{O}}
 
 const default_parity_func = x->argmax(x)
+const DT_parity_func = x->first(sort(collect(keys(x))))
 
 struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Real} <: SoleModels.AbstractDecisionEnsemble{O}
     models::Vector{T}
@@ -179,14 +181,13 @@ struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Real} <: Sole
     weights::Vector{W}
 
     function PasoDecisionEnsemble{O}(
-        models::AbstractVector{T},
-        aggregation::OptCallable,
-        weights::AbstractVector{W};
+        models::AbstractVector{T};
+        aggregation::OptCallable=nothing,
+        weights::AbstractVector{W}=Vector{Float64}(),
         suppress_parity_warning::Bool=false,
         parity_func::Base.Callable=default_parity_func
     ) where {O,T<:AbstractModel, W<:Real}
         @assert length(models) > 0 "Cannot instantiate empty ensemble!"
-
         models = wrap.(models)
 
         if isnothing(aggregation)
@@ -196,41 +197,14 @@ struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Real} <: Sole
         end
 
         A = typeof(aggregation)
-
         new{O,T,A,W}(collect(models), aggregation, weights)
     end
-    
-    function PasoDecisionEnsemble{O}(
-        models::AbstractVector;
-        kwargs...
-    ) where {O}
-        PasoDecisionEnsemble{O}(models, nothing, Vector{Float64}(); kwargs...)
-    end
 
-    function PasoDecisionEnsemble{O}(
-        models::AbstractVector,
-        aggregation::OptCallable;
-        kwargs...
-    ) where {O}
-        PasoDecisionEnsemble{O}(models, aggregation, Vector{Float64}(); kwargs...)
-    end
-
-    function PasoDecisionEnsemble{O}(
-        models::AbstractVector,
-        weights::AbstractVector;
-        kwargs...
-    ) where {O}
-        PasoDecisionEnsemble{O}(models, nothing, weights; kwargs...)
-    end
-
-    function PasoDecisionEnsemble(
-        models::AbstractVector,
-        args...; kwargs...
-    )
+    function PasoDecisionEnsemble(models::AbstractVector{Any}; kwargs...)
         @assert length(models) > 0 "Cannot instantiate empty ensemble!"
         models = wrap.(models)
         O = Union{outcometype.(models)...}
-        PasoDecisionEnsemble{O}(models, args...; kwargs...)
+        PasoDecisionEnsemble{O}(models; kwargs...)
     end
 end
 
@@ -314,7 +288,7 @@ end
 # 3.206 μs (5 allocations: 896 bytes)
 
 # ---------------------------------------------------------------------------- #
-#                         NUOVA STRUTTURA Info                           #
+#                            NUOVA STRUTTURA Info                              #
 # ---------------------------------------------------------------------------- #
 # Questa struttura andrebbe a sostituire la vecchia NamedTuple Info,
 # e include la seconda idea di Gio riguardo alla classificazione,
@@ -368,5 +342,123 @@ struct Info{T,O} <: AbstractInfo{T,O}
     end
 end
 
+# prova
+labels = sole_dtc[1].info.supporting_labels
+predictions = sole_dtc[1].info.supporting_predictions
+feturenames = MLJ.report(model_dtc.ds.mach).features
+classlabels = MLJ.report(model_dtc.ds.mach).classes_seen
+
+test = Info(labels, predictions; featurenames, classlabels)
+
+# La cosa che mi piace è che concettualmente abbiamo diviso la creazione dell'albero,
+# dalla sua applicazione, anche a livello di strutture dati:
+# ora 'solemodel' si occupa esclusivamente di creare la struttura DecisionTree/Ensemble,
+# mentre 'apply' usa la struttura Decision, ma crea la struttura Info
+# e magari le combina insieme in una sopra struttura?
+
+# ---------------------------------------------------------------------------- #
+#                          NUOVA FUNZIONE solemodel                            #
+# ---------------------------------------------------------------------------- #
+function get_condition(featid, featval)
+    test_operator = (<)
+    feature = VariableValue(featid)
+    ScalarCondition(feature, test_operator, featval)
+end
+
+function pasomodel(
+    model::DT.Ensemble{T,O};
+    weights::AbstractVector=Vector{Float64}(),
+    parity_func::Base.Callable=DT_parity_func
+)::PasoDecisionEnsemble where {T,O}
+    trees = map(t -> pasomodel(t), model.trees)
+
+    isempty(weights) ?
+        PasoDecisionEnsemble{O}(trees; parity_func) :
+        PasoDecisionEnsemble{O}(trees, weights; parity_func)
+end
+
+function pasomodel(tree::DT.InfoNode{T,O};)::PasoDecisionTree where {T,O}
+    root = pasomodel(tree.node)
+    PasoDecisionTree(root)
+end
+
+function pasomodel(tree::DT.Node)::Branch
+    cond = get_condition(tree.featid, tree.featval)
+    antecedent = Atom(cond)
+    lefttree  = pasomodel(tree.left)
+    righttree = pasomodel(tree.right)
+    Branch(antecedent, lefttree, righttree)
+end
+
+function pasomodel(tree::DT.Leaf)::ConstantModel
+    SoleModels.ConstantModel(tree.majority)
+end
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+# ---------------------------------------------------------------------------- #
+#                        nuova SoleXplorer train_test                          #
+# ---------------------------------------------------------------------------- #
+# Per poter fare dei benchmark comparativi, preferirei scrivere una nuova funzione train_test
+# di Sole, che usa le nuove funzioni
+
+function xplorer_apply(
+    ds :: SoleXplorer.DecisionTreeApply,
+    X  :: AbstractDataFrame,
+    y  :: AbstractVector
+)
+    featurenames = MLJ.report(ds.mach).features
+    solem        = pasomodel(MLJ.fitted_params(ds.mach).tree; featurenames)
+    logiset      = scalarlogiset(X, allow_propositional = true)
+    pasoapply!(solem, logiset, y)
+    return solem
+end
+
+function xplorer_apply(
+    ds :: SoleXplorer.PropositionalDataSet{RandomForestClassifier},
+    X  :: AbstractDataFrame,
+    y  :: AbstractVector
+)
+    classlabels  = ds.mach.fitresult[2][sortperm((ds.mach).fitresult[3])]
+    featurenames = MLJ.report(ds.mach).features
+    solem        = pasomodel(MLJ.fitted_params(ds.mach).forest; classlabels, featurenames)
+    logiset      = scalarlogiset(X, allow_propositional = true)
+    pasoapply!(solem, logiset, y)
+    return solem
+end
+
+function _paso_test(ds::SoleXplorer.EitherDataSet)::SoleXplorer.SoleModel
+    n_folds   = length(ds.pidxs)
+    solemodel = Vector{AbstractModel}(undef, n_folds)
+
+    # TODO this can be parallelizable
+    @inbounds @views for i in 1:n_folds
+        train, test = get_train(ds.pidxs[i]), get_test(ds.pidxs[i])
+        X_test, y_test = get_X(ds)[test, :], get_y(ds)[test]
+
+        SoleXplorer.has_xgboost_model(ds) && SoleXplorer.set_watchlist!(ds, i)
+
+        MLJ.fit!(ds.mach, rows=train, verbosity=0)
+        solemodel[i] = xplorer_apply(ds, X_test, y_test)
+    end
+
+    return SoleXplorer.SoleModel(ds, solemodel)
+end
+
+function paso_test(args...; kwargs...)::SoleXplorer.SoleModel
+    ds = SoleXplorer._setup_dataset(args...; kwargs...)
+    _paso_test(ds)
+end
+
+paso_test(ds::SoleXplorer.AbstractDataSet)::SoleXplorer.SoleModel = _paso_test(ds)
