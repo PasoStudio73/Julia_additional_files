@@ -60,11 +60,10 @@
 
 # struct SoleDecisionSet
 #     models::Union{DecisionTree, DecisionEnsemble, DecisioneXGBoost}
-#     info::Union{Vector{Info}, Info}
-#     featurenames::Vector{Symbol}
+#     info::Info
 # end
 
-# e modificare le pèrecedenti struct in questo modo:
+# e modificare le precedenti struct in questo modo:
 
 # struct DecisionTree{O} <: AbstractModel{O}
 #     root::M where {M<:Union{LeafModel{O},Branch{O}}}
@@ -158,7 +157,7 @@ sole_dtr = solemodels(model_dtr)
 sole_rfr = solemodels(model_rfr)
 
 # ---------------------------------------------------------------------------- #
-#                              NUOVA STRUTTURA                                 #
+#              NUOVE STRUTTURE DecisionEnsemble e DecisionTree                 #
 # ---------------------------------------------------------------------------- #
 # portando fuori la struttura 'info' dalla struttura albero,
 # non è più necessario averla mutable, può tornare ad essere immutabile.
@@ -265,10 +264,6 @@ struct PasoDecisionTree{O} <: AbstractModel{O}
     end
 end
 
-
-
-
-
 # ---------------------------------------------------------------------------- #
 #                                Gio's fix #2                                  #
 # ---------------------------------------------------------------------------- #
@@ -276,3 +271,102 @@ end
 # Alcune idee x comprimerle.
 # Primo step per migliorare è usare categorical vectors anziché vettori di stringhe come sono ora
 # (questo migliora solo il caso classificazione).
+
+# Partiamo dal caso di classificazione e vediamo qualche benchmark:
+# Metodo usato in SoleXplorer:
+@btime begin
+    label_levels = categorical(sole_dtc[1].info.supporting_labels, levels=levels(sole_dtc[1].info.supporting_labels))
+    label_coded = @. MLJ.levelcode(label_levels)
+end
+# 13.858 μs (82 allocations: 4.31 KiB)
+
+@btime begin
+    label_levels = categorical(sole_dtc[1].info.supporting_labels, levels=sort(unique(sole_dtc[1].info.supporting_labels)))
+    label_coded = @. MLJ.levelcode(label_levels)
+end
+# 2.420 μs (23 allocations: 1.77 KiB)
+
+@btime begin
+    label_levels = categorical(sole_dtc[1].info.supporting_labels, levels=sort(unique(sole_dtc[1].info.supporting_labels)))
+    label_coded = label_levels.refs
+end
+# 2.355 μs (20 allocations: 1.33 KiB)
+
+label_levels = categorical(sole_dtc[1].info.supporting_labels, levels=levels(sole_dtc[1].info.supporting_labels))
+label_coded_1 = @. MLJ.levelcode(label_levels)
+
+label_levels = categorical(sole_dtc[1].info.supporting_labels, levels=sort(unique(sole_dtc[1].info.supporting_labels)))
+label_coded_2 = @. MLJ.levelcode(label_levels)
+
+label_levels = categorical(sole_dtc[1].info.supporting_labels, levels=sort(unique(sole_dtc[1].info.supporting_labels)))
+label_coded_3 = label_levels.refs
+
+@test label_coded_1 == label_coded_2
+@test label_coded_1 == Int64.(label_coded_3)
+
+@btime sort(Symbol.(sole_dtc[1].info.supporting_labels))
+# 3.392 μs (7 allocations: 1.30 KiB)
+
+@btime begin
+    clabels = Symbol.(sole_dtc[1].info.supporting_labels)
+    sort!(clabels)
+end
+# 3.206 μs (5 allocations: 896 bytes)
+
+# ---------------------------------------------------------------------------- #
+#                         NUOVA STRUTTURA Info                           #
+# ---------------------------------------------------------------------------- #
+# Questa struttura andrebbe a sostituire la vecchia NamedTuple Info,
+# e include la seconda idea di Gio riguardo alla classificazione,
+# cioè salvare labels e predictions come refs di categorical.
+# Avendo cura di salvarsi le classlabels ordinate, altrimenti non si può tornare indietro.
+# Le classlabels, così come le già viste featurenames,
+# In questo punto potrebbero servire solo per la print (per ora uso il condizionale)
+
+abstract type AbstractInfo{T,O} end
+
+struct Info{T,O} <: AbstractInfo{T,O}
+    labels::Vector{T}
+    predictions::Vector{T}
+    featurenames::Vector{Symbol}
+    classlabels::Vector{Symbol}
+
+    function Info{O}(
+        labels::Vector{UInt32},
+        predictions::Vector{UInt32};
+        featurenames::AbstractVector,
+        classlabels::AbstractVector
+    ) where {O<:SoleModels.Label}
+        fnames = eltype(featurenames) <: Symbol ? featurenames : Symbol.(featurenames)
+        clabels = eltype(classlabels) <: Symbol ? classlabels : Symbol.(classlabels)
+        sort!(clabels)
+        new{UInt32, O}(labels, predictions, fnames, clabels)
+    end
+
+    # Classification constructor
+    function Info(
+        labels::AbstractVector{L},
+        predictions::AbstractVector{L};
+        kwargs...
+    ) where {L<:SoleModels.CLabel}
+        label_levels = labels isa MLJ.CategoricalArray ? labels : categorical(labels, levels=sort(unique(labels)))
+        preds_levels = predictions isa MLJ.CategoricalArray ? predictions : categorical(predictions, levels=sort(unique(predictions)))
+        Info{eltype(labels)}(label_levels.refs, preds_levels.refs; kwargs...)
+    end
+
+    # Regression constructor
+    function Info(
+        labels::AbstractVector{L},
+        predictions::AbstractVector{L};
+        featurenames::AbstractVector,
+        float32::Bool=False
+    ) where {L<:SoleModels.RLabel}
+        fnames = eltype(featurenames) <: Symbol ? featurenames : Symbol.(featurenames)
+        float32 ?
+            new{Float32, eltype(labels)}(Float32.(labels), Float32.(predictions), fnames, Symbol()) :
+            new{eltype(labels), eltype(labels)}(labels, predictions, fnames, Symbol())
+    end
+end
+
+
+
