@@ -164,16 +164,18 @@ sole_rfr = solemodels(model_rfr)
 # Ho creato delle costanti, non per questioni di efficenza,
 # ma solo per mera eleganza
 
-const Optional{T} = Union{T, Nothing}
-const OptCallable = Optional{Base.Callable}
-# const OptVecReal = Optional{Vector{<:Real}}
-# const OptReal = Optional{Real}
-# const OptAbstractVector{T} = Optional{AbstractVector{T}}
+const Optional{T}  = Union{T, Nothing}
+const OptCallable  = Optional{Base.Callable}
+# const OptAbsVector = Optional{AbstractVector}
+const OptAbsVector{T} = Optional{AbstractVector{T}}
 
 const Branch_or_Leaf{O} = Union{Branch{O}, LeafModel{O}}
 
-const default_parity_func = x->argmax(x)
-const DT_parity_func = x->first(sort(collect(keys(x))))
+# const default_parity_func = x->argmax(x)
+# const DT_parity_func = x->first(sort(collect(keys(x))))
+
+default_parity_func = x->argmax(x)
+DT_parity_func = x->first(sort(collect(keys(x))))
 
 struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Real} <: SoleModels.AbstractDecisionEnsemble{O}
     models::Vector{T}
@@ -183,7 +185,7 @@ struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Real} <: Sole
     function PasoDecisionEnsemble{O}(
         models::AbstractVector{T};
         aggregation::OptCallable=nothing,
-        weights::AbstractVector{W}=Vector{Float64}(),
+        weights::OptAbsVector{W}=nothing,
         suppress_parity_warning::Bool=false,
         parity_func::Base.Callable=default_parity_func
     ) where {O,T<:AbstractModel, W<:Real}
@@ -191,7 +193,9 @@ struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Real} <: Sole
         models = wrap.(models)
 
         if isnothing(aggregation)
-            aggregation = function (args...; suppress_parity_warning, kwargs...) SoleModels.bestguess(args...; suppress_parity_warning, parity_func, kwargs...) end
+            aggregation = function(args...; suppress_parity_warning, kwargs...)
+                SoleModels.bestguess(args...; suppress_parity_warning, parity_func, kwargs...)
+            end
         else
             !suppress_parity_warning || @warn "Unexpected value for suppress_parity_warning: $(suppress_parity_warning)."
         end
@@ -299,46 +303,65 @@ end
 
 abstract type AbstractInfo{T,O} end
 
-struct Info{T,O} <: AbstractInfo{T,O}
-    labels::Vector{T}
-    predictions::Vector{T}
-    featurenames::Vector{Symbol}
-    classlabels::Vector{Symbol}
+function get_refs(y::AbstractVector{<:SoleModels.CLabel})::Vector{UInt32}
+    if y isa MLJ.CategoricalArray
+        return y.refs
+    else
+        cat_array = categorical(y, levels=sort(unique(y)))
+        return cat_array.refs
+    end
+end
 
+struct Info{T,O} <: AbstractInfo{T,O}
+    labels       :: Vector{T}
+    predictions  :: Vector{T}
+    featurenames :: OptAbsVector{Symbol}
+    classlabels  :: OptAbsVector{Symbol}
+
+    # Generic constructor
     function Info{O}(
-        labels::Vector{UInt32},
-        predictions::Vector{UInt32};
-        featurenames::AbstractVector,
-        classlabels::AbstractVector
-    ) where {O<:SoleModels.Label}
-        fnames = eltype(featurenames) <: Symbol ? featurenames : Symbol.(featurenames)
-        clabels = eltype(classlabels) <: Symbol ? classlabels : Symbol.(classlabels)
+        labels       :: Vector{T},
+        predictions  :: Vector{T};
+        featurenames :: OptAbsVector,
+        classlabels  :: OptAbsVector
+    )::Info where {T,O<:SoleModels.Label}
+        fnames = if isnothing(featurenames)
+            nothing
+        else
+            eltype(featurenames) <: Symbol ? featurenames : Symbol.(featurenames)
+        end
+
+        clabels = if isnothing(classlabels)
+            nothing
+        else
+            eltype(classlabels)  <: Symbol ? classlabels  : Symbol.(classlabels)
+        end
         sort!(clabels)
-        new{UInt32, O}(labels, predictions, fnames, clabels)
+
+        new{T, O}(labels, predictions, fnames, clabels)
     end
 
     # Classification constructor
     function Info(
-        labels::AbstractVector{L},
-        predictions::AbstractVector{L};
+        labels      :: AbstractVector{L},
+        predictions :: AbstractVector{L};
         kwargs...
-    ) where {L<:SoleModels.CLabel}
-        label_levels = labels isa MLJ.CategoricalArray ? labels : categorical(labels, levels=sort(unique(labels)))
-        preds_levels = predictions isa MLJ.CategoricalArray ? predictions : categorical(predictions, levels=sort(unique(predictions)))
-        Info{eltype(labels)}(label_levels.refs, preds_levels.refs; kwargs...)
+    )::Info where {L<:SoleModels.CLabel}
+        labels_refs = get_refs(labels)
+        preds_refs  = get_refs(predictions)
+        Info{eltype(labels)}(labels_refs, preds_refs; kwargs...)
     end
 
     # Regression constructor
     function Info(
-        labels::AbstractVector{L},
-        predictions::AbstractVector{L};
-        featurenames::AbstractVector,
-        float32::Bool=False
-    ) where {L<:SoleModels.RLabel}
-        fnames = eltype(featurenames) <: Symbol ? featurenames : Symbol.(featurenames)
+        labels       :: AbstractVector{L},
+        predictions  :: AbstractVector{L};
+        float32      :: Bool=False;
+        kwargs...
+    )::Info where {L<:SoleModels.RLabel}
         float32 ?
-            new{Float32, eltype(labels)}(Float32.(labels), Float32.(predictions), fnames, Symbol()) :
-            new{eltype(labels), eltype(labels)}(labels, predictions, fnames, Symbol())
+            Info{eltype(labels)}(Float32.(labels), Float32.(predictions); kwargs...) :
+            Info{eltype(labels)}(labels, predictions; kwargs...)
     end
 end
 
@@ -356,9 +379,27 @@ test = Info(labels, predictions; featurenames, classlabels)
 # mentre 'apply' usa la struttura Decision, ma crea la struttura Info
 # e magari le combina insieme in una sopra struttura?
 
+struct SoleModel
+    model::Union{PasoDecisionEnsemble, PasoDecisionTree}
+    info::Info
+end
+
 # ---------------------------------------------------------------------------- #
 #                          NUOVA FUNZIONE solemodel                            #
 # ---------------------------------------------------------------------------- #
+# Come si potrà notare, ora 'solemodel' è ultra semplificata: si occupa esclusivamente
+# di convertire l'albero o la forest DecisionTree in un modello Sole.
+# La semplificazione più evidente è il totale inutilizzo di featurenames e classnames.
+# Per 2 motivi:
+# 'info' non c'è più; se ne occuperà la funzione 'apply!' di creare la struttura 'info'.
+# la 'print' di questa struttura restituirà un albero con features senza nome (V1, V2 .. Vn)
+# e le classlabels saranno quelle originali, quindi nel caso di DecisionTree, numeri interi.
+# In teoria questo sarebbe in contrasto con quanto detto qualche riga fa,
+# ma ho pensato che una print fatta come si deve la si potrà fare una volta che avremo pronta anche la struttura info,
+# quindi dopo l'apply.
+# E che quindi sarà conveniente fare una struttura che contenga sia solemodel che info,
+# e la stampa di quest'ultima, sarà completa.
+
 function get_condition(featid, featval)
     test_operator = (<)
     feature = VariableValue(featid)
@@ -394,18 +435,168 @@ function pasomodel(tree::DT.Leaf)::ConstantModel
     SoleModels.ConstantModel(tree.majority)
 end
 
+# ---------------------------------------------------------------------------- #
+#                            NUOVA funzione apply!                             #
+# ---------------------------------------------------------------------------- #
+# una differenza fondamentale rispetto alla precedente versione è che gia dall'apply! dobbiamo
+# differenziare tra classificazione e regressione, in quanto gli info sono differenti (classificazione/regressione)
+# la differenza principale sta nelle classlabels: ovviamente inutili in regressione.
+# ma in regressione possiamo scegliere se salvare i dati delle labels in float32 (disabilitato di default, almeno per ora)
 
+# non potrà essere più apply!, ma solo apply, questo perchè il suo output sara la struttura Info
 
+pasoroot(m::PasoDecisionTree) = m.root
+models(m::PasoDecisionEnsemble) = m.models
 
+# function set_predictions(
+#     info  :: NamedTuple,
+#     preds :: AbstractVector{T},
+#     y     :: AbstractVector{S}
+# )::NamedTuple where {T,S<:SoleModels.Label}
+#     merge(info, (supporting_predictions=preds, supporting_labels=y))
+# end
 
+aggregation(m::PasoDecisionEnsemble) = m.aggregation
+weights(m::PasoDecisionEnsemble) = m.weights
+# Returns the aggregation function, patched by weights if the model has them.
+function weighted_aggregation(m::PasoDecisionEnsemble)
+    if isempty(weights(m))
+        aggregation(m)
+    else
+        function (labels; kwargs...)
+            aggregation(m)(labels, weights(m); kwargs...)
+        end
+    end
+end
 
+# QUESTA TIPIZZAZIONE FA CAGARE:
+# devo salvare il tipo di provenienza in m, esempio DecisionEnsemble{XGBoostDecisinTreeClassifier}
+# altrimenti col cavolo che riesco a fare gli apply come vorrei
+function pasoapply(
+    m::PasoDecisionEnsemble,
+    d::SoleModels.AbstractInterpretationSet,
+    y::AbstractVector{<:SoleModels.CLabel};
+    featurenames::AbstractVector,
+    classlabels::AbstractVector,
+    # mode = :replace,
+    leavesonly = false,
+    suppress_parity_warning = false,
+    kwargs...
+)::Info
+    # mi sento di eliminare __apply_pre e __apply_post
+    # in quanto, da un primo sguardo, sembrano avere senso sono nel caso in cui le classlabels
+    # non siano presenti.
+    # ma da come stiamo rivedendo la funzione, le classlabel devono essere sempre presenti.
+    # questo ovviamente solo nel caso di classificazione.
+    # y = SoleModels.__apply_pre(m, d, y)
 
+    preds = hcat([pasoapply(subm, d, y; mode, leavesonly, kwargs...) for subm in models(m)]...)
 
+    # preds = SoleModels.__apply_post(m, preds)
 
+    preds = map(eachrow(preds)) do row
+        weighted_aggregation(m)(row; suppress_parity_warning, kwargs...)
+    end
 
+    # preds = SoleModels.__apply_pre(m, d, preds)
 
+    # m.info  = set_predictions(m.info, preds, y)
+    # return nothing
+    Info(y, preds; featurenames, classlabels)
+end
 
+function pasoapply(
+    m::PasoDecisionTree,
+    d::SoleModels.AbstractInterpretationSet,
+    y::AbstractVector{<:SoleModels.CLabel};
+    featurenames::AbstractVector,
+    classlabels::AbstractVector,
+    # mode = :replace,
+    leavesonly = false,
+    kwargs...
+)
+    # y = SoleModels.__apply_pre(m, d, y)
+    preds = pasoapply(pasoroot(m), d, y;
+        # mode = mode,
+        leavesonly,
+        kwargs...
+    )
 
+    # m.info  = set_predictions(m.info, preds, y)
+    # return nothing
+    Info(y, preds; featurenames, classlabels)
+end
+
+function pasoapply(
+    m::Branch,
+    d::SoleModels.AbstractInterpretationSet,
+    y::AbstractVector;
+    check_args::Tuple = (),
+    check_kwargs::NamedTuple = (;),
+    # mode = :replace,
+    leavesonly = false,
+    # show_progress = true,
+    kwargs...
+)
+    # if mode == :replace
+    #     mode = :append
+    # end
+    checkmask = SoleModels.checkantecedent(m, d, check_args...; check_kwargs...)
+    preds = Vector{outputtype(m)}(undef,length(checkmask))
+    @sync begin
+        if any(checkmask)
+            l = Threads.@spawn pasoapply(
+                posconsequent(m),
+                slicedataset(d, checkmask; return_view = true),
+                y[checkmask];
+                check_args,
+                check_kwargs,
+                # mode = mode,
+                leavesonly,
+                kwargs...
+            )
+        end
+        ncheckmask = (!).(checkmask)
+        if any(ncheckmask)
+            r = Threads.@spawn pasoapply(
+                negconsequent(m),
+                slicedataset(d, ncheckmask; return_view = true),
+                y[ncheckmask];
+                check_args,
+                check_kwargs,
+                # mode = mode,
+                leavesonly,
+                kwargs...
+            )
+        end
+        if any(checkmask)
+            preds[checkmask] .= fetch(l)
+        end
+        if any(ncheckmask)
+            preds[ncheckmask] .= fetch(r)
+        end
+    end
+    # return __pasoapply(m, mode, preds, y, leavesonly)
+    return preds
+end
+
+function pasoapply(
+    m::ConstantModel,
+    d::SoleModels.AbstractInterpretationSet,
+    y::AbstractVector;
+    # mode = :replace,
+    leavesonly = false,
+    kwargs...
+)
+    # if mode == :replace
+    #     # non serve più
+    #     # SoleModels.recursivelyemptysupports!(m, leavesonly)
+    #     mode = :append
+    # end
+    return fill(outcome(m), ninstances(d))
+
+    # return __pasoapply(m, mode, preds, y, leavesonly)
+end
 
 # ---------------------------------------------------------------------------- #
 #                        nuova SoleXplorer train_test                          #
@@ -419,10 +610,12 @@ function xplorer_apply(
     y  :: AbstractVector
 )
     featurenames = MLJ.report(ds.mach).features
-    solem        = pasomodel(MLJ.fitted_params(ds.mach).tree; featurenames)
+    classlabels = MLJ.report(ds.mach).classes_seen
+    solem        = pasomodel(MLJ.fitted_params(ds.mach).tree)
     logiset      = scalarlogiset(X, allow_propositional = true)
-    pasoapply!(solem, logiset, y)
-    return solem
+    @show typeof(y)
+    info = pasoapply(solem, logiset, y; featurenames, classlabels)
+    return solem, info
 end
 
 function xplorer_apply(
@@ -430,35 +623,270 @@ function xplorer_apply(
     X  :: AbstractDataFrame,
     y  :: AbstractVector
 )
-    classlabels  = ds.mach.fitresult[2][sortperm((ds.mach).fitresult[3])]
     featurenames = MLJ.report(ds.mach).features
-    solem        = pasomodel(MLJ.fitted_params(ds.mach).forest; classlabels, featurenames)
+    classlabels  = ds.mach.fitresult[2]
+    solem        = pasomodel(MLJ.fitted_params(ds.mach).forest)
     logiset      = scalarlogiset(X, allow_propositional = true)
-    pasoapply!(solem, logiset, y)
-    return solem
+    info = pasoapply(solem, logiset, y; featurenames, classlabels)
+    return solem, info
 end
 
-function _paso_test(ds::SoleXplorer.EitherDataSet)::SoleXplorer.SoleModel
+function _paso_test(ds::SoleXplorer.EitherDataSet)::Vector{SoleModel}
     n_folds   = length(ds.pidxs)
-    solemodel = Vector{AbstractModel}(undef, n_folds)
+    solemodel = Vector{SoleModel}(undef, n_folds)
 
     # TODO this can be parallelizable
-    @inbounds @views for i in 1:n_folds
+    @inbounds for i in 1:n_folds
         train, test = get_train(ds.pidxs[i]), get_test(ds.pidxs[i])
-        X_test, y_test = get_X(ds)[test, :], get_y(ds)[test]
+        X_test = @views get_X(ds)[test, :]
+        y_test = get_y(ds)[test]
 
         SoleXplorer.has_xgboost_model(ds) && SoleXplorer.set_watchlist!(ds, i)
 
         MLJ.fit!(ds.mach, rows=train, verbosity=0)
-        solemodel[i] = xplorer_apply(ds, X_test, y_test)
+        solem, info = xplorer_apply(ds, X_test, y_test)
+        solemodel[i] = SoleModel(solem, info)
     end
 
-    return SoleXplorer.SoleModel(ds, solemodel)
+    return solemodel
 end
 
-function paso_test(args...; kwargs...)::SoleXplorer.SoleModel
+function paso_test(args...; kwargs...)::Vector{SoleModel}
     ds = SoleXplorer._setup_dataset(args...; kwargs...)
     _paso_test(ds)
 end
 
-paso_test(ds::SoleXplorer.AbstractDataSet)::SoleXplorer.SoleModel = _paso_test(ds)
+paso_test(ds::SoleXplorer.AbstractDataSet)::Vector{SoleModel} = _paso_test(ds)
+
+# Verifichiamo il corretto funzionamento
+dsc = setup_dataset(
+    Xc, yc;
+    model=DecisionTreeClassifier(),
+    resample=Holdout(shuffle=true),
+        train_ratio=0.7,
+        rng=Xoshiro(1),   
+)
+solemc = paso_test(dsc)
+
+rfc = setup_dataset(
+    Xc, yc;
+    model=RandomForestClassifier(),
+    resample=Holdout(shuffle=true),
+        train_ratio=0.7,
+        rng=Xoshiro(1),   
+)
+solemc = paso_test(rfc)
+
+# ---------------------------------------------------------------------------- #
+#                               get operations                                 #
+# ---------------------------------------------------------------------------- #
+function get_operations(
+    measures   :: Vector,
+    prediction :: Symbol,
+)
+    map(measures) do m
+        kind_of_proxy = MLJ.MLJBase.StatisticalMeasuresBase.kind_of_proxy(m)
+        observation_scitype = MLJ.MLJBase.StatisticalMeasuresBase.observation_scitype(m)
+        isnothing(kind_of_proxy) && (return paso_predict)
+
+        if prediction === :probabilistic
+            if kind_of_proxy === MLJ.MLJBase.LearnAPI.Distribution()
+                return paso_predict
+            elseif kind_of_proxy === MLJ.MLJBase.LearnAPI.Point()
+                if observation_scitype <: Union{Missing,Finite}
+                    return paso_predict_mode
+                elseif observation_scitype <:Union{Missing,Infinite}
+                    return paso_predict_mean
+                else
+                    throw(err_ambiguous_operation(prediction, m))
+                end
+            else
+                throw(err_ambiguous_operation(prediction, m))
+            end
+        elseif prediction === :deterministic
+            if kind_of_proxy === MLJ.MLJBase.LearnAPI.Distribution()
+                throw(err_incompatible_prediction_types(prediction, m))
+            elseif kind_of_proxy === MLJ.MLJBase.LearnAPI.Point()
+                return paso_predict
+            else
+                throw(err_ambiguous_operation(prediction, m))
+            end
+        elseif prediction === :interval
+            if kind_of_proxy === MLJ.MLJBase.LearnAPI.ConfidenceInterval()
+                return paso_predict
+            else
+                throw(err_ambiguous_operation(prediction, m))
+            end
+        else
+            throw(MLJ.MLJBase.ERR_UNSUPPORTED_PREDICTION_TYPE)
+        end
+    end
+end
+
+# ---------------------------------------------------------------------------- #
+#                                eval measures                                 #
+# ---------------------------------------------------------------------------- #
+get_preds(m::SoleModel) = m.info.predictions
+get_labels(m::SoleModel) = m.info.labels
+
+function paso_predict(preds::Vector{UInt32}, ::Vector{UInt32})
+    # eltype(preds) <: CLabel ?
+    #     begin
+    #         classes_seen = unique(labels)
+    #         eltype(preds) <: MLJ.CategoricalValue ||
+    #             (preds = categorical(preds, levels=levels(classes_seen)))
+            [UnivariateFinite([p], [1.0]) for p in preds]
+        # end :
+        # preds
+end
+
+paso_predict_mode(preds::Vector{UInt32}, ::Vector{UInt32}) = preds
+
+function eval_measures(
+    ds::SoleXplorer.EitherDataSet,
+    solem::Vector{SoleModel},
+    measures::Tuple{Vararg{SoleXplorer.FussyMeasure}},
+    y_test::Vector{<:AbstractVector{<:SoleModels.Label}}
+)::SoleXplorer.Measures
+    mach_model = SoleXplorer.get_mach_model(ds)
+    measures        = MLJ.MLJBase._actual_measures([measures...], mach_model)
+    operations      = get_operations(measures, MLJ.MLJBase.prediction_type(mach_model))
+
+    nfolds          = length(ds)
+    test_fold_sizes = [length(y_test[k]) for k in 1:nfolds]
+    nmeasures       = length(measures)
+
+    # weights used to aggregate per-fold measurements, which depends on a measures
+    # external mode of aggregation:
+    fold_weights(mode) = nfolds .* test_fold_sizes ./ sum(test_fold_sizes)
+    fold_weights(::MLJ.MLJBase.StatisticalMeasuresBase.Sum) = nothing
+    
+    measurements_vector = mapreduce(vcat, 1:nfolds) do k
+        # Get the classlabels from the Info struct
+        classlabels = solem[k].info.classlabels
+        
+        yhat_given_operation = Dict(op => begin
+            preds_refs = op(get_preds(solem[k]), get_labels(solem[k]))
+            # Convert UInt32 refs back to string labels using classlabels
+            if eltype(preds_refs) <: UInt32 && !isempty(classlabels)
+                String.(classlabels[preds_refs])
+            else
+                preds_refs
+            end
+        end for op in unique(operations))
+        # yhat_given_operation = Dict(op=>op(get_preds(solem[k]), get_labels(solem[k])) for op in unique(operations))
+
+        # costretto a convertirlo a stringa in quanto certe misure di statistical measures non accettano
+        # categorical array, tipo confusion matrix e kappa
+        test = eltype(y_test[k]) <: SoleModels.CLabel ? String.(y_test[k]) : y_test[k]
+
+        [map(measures, operations) do m, op
+            m(
+                yhat_given_operation[op],
+                test,
+                # MLJ.MLJBase._view(weights, test),
+                # class_weights
+                MLJ.MLJBase._view(nothing, test),
+                nothing
+            )
+        end]
+    end
+
+    measurements_matrix = permutedims(reduce(hcat, measurements_vector))
+
+    # measurements for each fold:
+    fold = map(1:nmeasures) do k
+        measurements_matrix[:,k]
+    end
+
+    # overall aggregates:
+    measures_values = map(1:nmeasures) do k
+        m = measures[k]
+        mode = MLJ.MLJBase.StatisticalMeasuresBase.external_aggregation_mode(m)
+        MLJ.MLJBase.StatisticalMeasuresBase.aggregate(
+            fold[k];
+            mode,
+            weights=fold_weights(mode)
+        )
+    end
+
+    SoleXplorer.Measures(fold, measures, measures_values, operations)
+end
+
+# ---------------------------------------------------------------------------- #
+#                              symbolic_analysis                               #
+# ---------------------------------------------------------------------------- #
+mutable struct ModelSet <: SoleXplorer.AbstractModelSet
+    ds       :: SoleXplorer.EitherDataSet
+    sole     :: Vector{SoleModel}
+    rules    :: SoleXplorer.OptRules
+    measures :: SoleXplorer.OptMeasures
+end
+
+function _paso_analysis(
+    ds::SoleXplorer.EitherDataSet,
+    solem::Vector{SoleModel};
+    extractor::Union{Nothing,SoleXplorer.RuleExtractor}=nothing,
+    measures::Tuple{Vararg{SoleXplorer.FussyMeasure}}=(),
+)::ModelSet
+    # rules = isnothing(extractor)  ? nothing : begin
+    #     # TODO propaga rng, dovrai fare intrees mutable struct
+    #     extractrules(extractor, ds, solem)
+    # end
+
+    measures = isempty(measures) ? nothing : begin
+        y_test = SoleXplorer.get_y_test(ds)
+        # all_classes = unique(Iterators.flatten(y_test))
+        eval_measures(ds, solem, measures, y_test)
+    end
+
+    return ModelSet(ds, solem, nothing, measures)
+end
+
+function paso_analysis(
+    ds::SoleXplorer.EitherDataSet,
+    solem::SoleModel;
+    kwargs...
+)::ModelSet
+    _paso_analysis(ds, solem; kwargs...)
+end
+
+function paso_analysis(
+    X::AbstractDataFrame,
+    y::AbstractVector,
+    w::SoleXplorer.OptVector = nothing;
+    extractor::Union{Nothing,SoleXplorer.RuleExtractor}=nothing,
+    measures::Tuple{Vararg{SoleXplorer.FussyMeasure}}=(),
+    kwargs...
+)::ModelSet
+    ds = SoleXplorer._setup_dataset(X, y, w; kwargs...)
+    solem = _paso_test(ds)
+    _paso_analysis(ds, solem; extractor, measures)
+end
+
+paso_dtc = paso_analysis(
+    Xc, yc,
+    model=DecisionTreeClassifier(),
+    resample=Holdout(shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy, kappa)
+)
+
+model_rfc = symbolic_analysis(
+    Xc, yc,
+    model=RandomForestClassifier(),
+    resample=Holdout(shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy, kappa)
+)
+
+model_rfc = paso_analysis(
+    Xc, yc,
+    model=RandomForestClassifier(),
+    resample=Holdout(shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy, kappa)
+)

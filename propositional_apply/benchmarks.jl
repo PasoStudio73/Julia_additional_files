@@ -37,7 +37,7 @@ modelc = symbolic_analysis(
 
 function _symbolic_analysis(
     ds::EitherDataSet,
-    solem::SoleModel;
+    solem::SModel;
     extractor::Union{Nothing,RuleExtractor}=nothing,
     measures::Tuple{Vararg{FussyMeasure}}=(),
 )::ModelSet
@@ -211,7 +211,7 @@ end
 # 4.949 s (30675782 allocations: 1.27 GiB)
 
 # ---------------------------------------------------------------------------- #
-#                              SoleModel bench                                 #
+#                              SModel bench                                 #
 # ---------------------------------------------------------------------------- #
 ds = setup_dataset(
     Xr, yr,

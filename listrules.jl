@@ -951,7 +951,7 @@ function xplorer_apply(
     return solem
 end
 
-function _paso_test(ds::SoleXplorer.EitherDataSet)::SoleXplorer.SoleModel
+function _paso_test(ds::SoleXplorer.EitherDataSet)::SoleXplorer.SModel
     n_folds   = length(ds.pidxs)
     solemodel = Vector{AbstractModel}(undef, n_folds)
 
@@ -966,15 +966,15 @@ function _paso_test(ds::SoleXplorer.EitherDataSet)::SoleXplorer.SoleModel
         solemodel[i] = xplorer_apply(ds, X_test, y_test)
     end
 
-    return SoleXplorer.SoleModel(ds, solemodel)
+    return SoleXplorer.SModel(ds, solemodel)
 end
 
-function paso_test(args...; kwargs...)::SoleXplorer.SoleModel
+function paso_test(args...; kwargs...)::SoleXplorer.SModel
     ds = SoleXplorer._setup_dataset(args...; kwargs...)
     _paso_test(ds)
 end
 
-paso_test(ds::SoleXplorer.AbstractDataSet)::SoleXplorer.SoleModel = _paso_test(ds)
+paso_test(ds::SoleXplorer.AbstractDataSet)::SoleXplorer.SModel = _paso_test(ds)
 
 # per completare l'opera dobbiamo scrivere i metodi di apply! che accettano PasoDecisionTree e PasoEnsemble
 
