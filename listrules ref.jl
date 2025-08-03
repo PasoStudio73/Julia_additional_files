@@ -1,39 +1,217 @@
-using Test
 using SoleXplorer
+using SoleModels
 using MLJ
 using DataFrames, Random
+using Test, BenchmarkTools
+import DecisionTree as DT
 const SX = SoleXplorer
 
 Xc, yc = @load_iris
 Xc = DataFrame(Xc)
 
 modelc = symbolic_analysis(Xc, yc)
+ds = modelc.ds
 
-####################################################################
+# ---------------------------------------------------------------------------- #
+struct PasoConstantModel{O} <: LeafModel{O}
+    outcome::O
+    info::Base.RefValue{<:NamedTuple}
+
+    function PasoConstantModel{O}(
+        outcome::O2,
+        info::Base.RefValue{<:NamedTuple}
+    ) where {O,O2}
+        new{O}(convert(O, outcome), info)
+    end
+
+    function PasoConstantModel(
+        outcome::O,
+        info::Base.RefValue{<:NamedTuple}
+    ) where {O}
+        PasoConstantModel{O}(outcome, info)
+    end
+
+    function PasoConstantModel{O}(m::PasoConstantModel) where {O}
+        PasoConstantModel{O}(m.outcome, m.info)
+    end
+
+    function PasoConstantModel(m::PasoConstantModel)
+        PasoConstantModel(m.outcome, m.info)
+    end
+end
+
+outcome(m::PasoConstantModel) = m.outcome
+leafmodelname(m::PasoConstantModel) = string(outcome(m))
+iscomplete(::PasoConstantModel) = true
+
+# ---------------------------------------------------------------------------- #
+struct PasoBranch{O} <: AbstractModel{O}
+    antecedent::Formula
+    posconsequent::M where {M<:AbstractModel{<:O}}
+    negconsequent::M where {M<:AbstractModel{<:O}}
+    info::Base.RefValue{<:NamedTuple}
+
+    function PasoBranch{O}(
+        antecedent::Formula,
+        posconsequent::Any,
+        negconsequent::Any,
+        info::Base.RefValue{<:NamedTuple}
+    ) where {O}
+        A = typeof(antecedent)
+        posconsequent = wrap(posconsequent)
+        negconsequent = wrap(negconsequent)
+        new{O}(antecedent, posconsequent, negconsequent, info)
+    end
+
+    function PasoBranch(
+        antecedent::Formula,
+        posconsequent::Any,
+        negconsequent::Any,
+        info::Base.RefValue{<:NamedTuple}
+    )
+        A = typeof(antecedent)
+        posconsequent = wrap(posconsequent)
+        negconsequent = wrap(negconsequent)
+        O = Union{outcometype(posconsequent),outcometype(negconsequent)}
+        PasoBranch{O}(antecedent, posconsequent, negconsequent, info)
+    end
+
+    function PasoBranch(
+        antecedent::Formula,
+        (posconsequent, negconsequent)::Tuple{Any,Any},
+        info::Base.RefValue{<:NamedTuple}
+    )
+        PasoBranch(antecedent, posconsequent, negconsequent, info)
+    end
+end
+
+antecedent(m::PasoBranch) = m.antecedent
+posconsequent(m::PasoBranch) = m.posconsequent
+negconsequent(m::PasoBranch) = m.negconsequent
+iscomplete(m::PasoBranch) = iscomplete(posconsequent(m)) && iscomplete(negconsequent(m))
+immediatesubmodels(m::PasoBranch) = [posconsequent(m), negconsequent(m)]
+nimmediatesubmodels(m::PasoBranch) = 2
+listimmediaterules(m::PasoBranch{O}) where {O} = [
+    Rule{O}(antecedent(m), posconsequent(m)),
+    Rule{O}(SoleLogics.NEGATION(antecedent(m)), negconsequent(m)),
+]
+
+pasocheckantecedent(
+    m::Union{Rule,PasoBranch},
+    i::SoleModels.AbstractInterpretation,
+    args...;
+    kwargs...
+) = check(antecedent(m), i, args...; kwargs...)
+pasocheckantecedent(
+    m::Union{Rule,PasoBranch},
+    d::SoleModels.AbstractInterpretationSet,
+    i_instance::Integer,
+    args...;
+    kwargs...
+) = check(antecedent(m), d, i_instance, args...; kwargs...)
+pasocheckantecedent(
+    m::Union{Rule,PasoBranch},
+    d::SoleModels.AbstractInterpretationSet,
+    args...;
+    kwargs...
+) = check(antecedent(m), d, args...; kwargs...)
+
+# ---------------------------------------------------------------------------- #
+mutable struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Union{Nothing,AbstractVector}} <: SoleModels.AbstractDecisionEnsemble{O}
+    models::Vector{T}
+    aggregation::A
+    weights::W
+    info::NamedTuple
+
+    function PasoDecisionEnsemble{O}(
+        models::AbstractVector{T},
+        aggregation::Union{Nothing,Base.Callable},
+        weights::Union{Nothing,AbstractVector},
+        info::NamedTuple=(;);
+        suppress_parity_warning=false,
+        parity_func=x->argmax(x)
+    ) where {O,T<:AbstractModel}
+        @assert length(models) > 0 "Cannot instantiate empty ensemble!"
+        models = wrap.(models)
+        if isnothing(aggregation)
+            aggregation = function (args...; suppress_parity_warning, kwargs...) SoleModels.bestguess(args...; suppress_parity_warning, parity_func, kwargs...) end
+        else
+            !suppress_parity_warning || @warn "Unexpected value for suppress_parity_warning: $(suppress_parity_warning)."
+        end
+        # T = typeof(models)
+        W = typeof(weights)
+        A = typeof(aggregation)
+        new{O,T,A,W}(collect(models), aggregation, weights, info)
+    end
+    
+    function PasoDecisionEnsemble{O}(
+        models::AbstractVector;
+        kwargs...
+    ) where {O}
+        info=(;)
+        PasoDecisionEnsemble{O}(models, nothing, nothing, info; kwargs...)
+    end
+
+    function PasoDecisionEnsemble{O}(
+        models::AbstractVector,
+        info::NamedTuple;
+        kwargs...
+    ) where {O}
+        PasoDecisionEnsemble{O}(models, nothing, nothing, info; kwargs...)
+    end
+
+    function PasoDecisionEnsemble{O}(
+        models::AbstractVector,
+        aggregation::Union{Nothing,Base.Callable},
+        info::NamedTuple=(;);
+        kwargs...
+    ) where {O}
+        PasoDecisionEnsemble{O}(models, aggregation, nothing, info; kwargs...)
+    end
+
+    function PasoDecisionEnsemble{O}(
+        models::AbstractVector,
+        weights::AbstractVector,
+        info::NamedTuple=(;);
+        kwargs...
+    ) where {O}
+        PasoDecisionEnsemble{O}(models, nothing, weights, info; kwargs...)
+    end
+
+    function PasoDecisionEnsemble(
+        models::AbstractVector,
+        args...; kwargs...
+    )
+        @assert length(models) > 0 "Cannot instantiate empty ensemble!"
+        models = wrap.(models)
+        O = Union{outcometype.(models)...}
+        PasoDecisionEnsemble{O}(models, args...; kwargs...)
+    end
+end
 
 mutable struct PasoDecisionTree{O} <: AbstractModel{O}
-    root::M where {M<:Union{LeafModel{O},Branch{O}}}
+    root::Union{LeafModel{O},PasoBranch{O}}
     info::NamedTuple
 
     function PasoDecisionTree(
-        root::Union{LeafModel{O},Branch{O}},
-        info::NamedTuple = (;),
+        root::Union{LeafModel{O},PasoBranch{O}},
+        info::NamedTuple=(;)
     ) where {O}
         new{O}(root, info)
     end
 
     function PasoDecisionTree(
         root::Any,
-        info::NamedTuple = (;),
+        info::NamedTuple=(;)
     )
         root = wrap(root)
         M = typeof(root)
         O = outcometype(root)
-        @assert M <: Union{LeafModel{O},Branch{O}} "" *
+        @assert M <: Union{LeafModel{O},PasoBranch{O}} "" *
             "Cannot instantiate PasoDecisionTree{$(O)}(...) with root of " *
             "type $(typeof(root)). Note that the should be either a LeafModel or a " *
-            "Branch. " *
-            "$(M) <: $(Union{LeafModel,Branch{<:O}}) should hold."
+            "PasoBranch. " *
+            "$(M) <: $(Union{LeafModel,PasoBranch{<:O}}) should hold."
         new{O}(root, info)
     end
 
@@ -41,16 +219,14 @@ mutable struct PasoDecisionTree{O} <: AbstractModel{O}
         antecedent::Formula,
         posconsequent::Any,
         negconsequent::Any,
-        info::NamedTuple = (;),
+        info::NamedTuple=(;)
     )
         posconsequent isa PasoDecisionTree && (posconsequent = root(posconsequent))
         negconsequent isa PasoDecisionTree && (negconsequent = root(negconsequent))
-        return PasoDecisionTree(Branch(antecedent, posconsequent, negconsequent, info))
+        return PasoDecisionTree(PasoBranch(antecedent, posconsequent, negconsequent, Ref(info)), info)
     end
 end
 
-# ---------------------------------------------------------------------------- #
-#                          nuova funzione solemodel                            #
 # ---------------------------------------------------------------------------- #
 function get_featurenames(tree::Union{DT.Ensemble, DT.InfoNode})
     if !hasproperty(tree, :info)
@@ -58,7 +234,7 @@ function get_featurenames(tree::Union{DT.Ensemble, DT.InfoNode})
     end
     return tree.info.featurenames
 end
-get_classlabels(tree::Union{DT.Ensemble, DT.InfoNode})::Vector{<:SoleModels.Label} = tree.info.classlabels
+get_classlabels(tree::Union{DT.Ensemble, DT.InfoNode})::Vector{<:SX.Label} = tree.info.classlabels
 
 function get_condition(featid, featval, featurenames)
     test_operator = (<)
@@ -66,87 +242,99 @@ function get_condition(featid, featval, featurenames)
     return ScalarCondition(feature, test_operator, featval)
 end
 
+# ---------------------------------------------------------------------------- #
+function pasomodel(
+    model          :: DT.Ensemble{T,O};
+    featurenames   :: Vector{Symbol}=Symbol[],
+    weights        :: Vector{<:Number}=Number[],
+    classlabels    :: AbstractVector{<:SoleModels.Label}=SoleModels.Label[],
+    keep_condensed :: Bool=false,
+    parity_func    :: Base.Callable=x->first(sort(collect(keys(x))))
+)::PasoDecisionEnsemble where {T,O}
+    isempty(featurenames) && (featurenames = get_featurenames(model))
+    info= (
+        supporting_predictions=SX.CLabel[],
+        supporting_labels=SX.CLabel[],
+        featurenames=Symbol[],
+        classlabels=Symbol[]
+    )
+
+    trees = map(t -> pasomodel(t, Ref(info); featurenames, classlabels), model.trees)
+
+    isnothing(weights) ?
+        PasoDecisionEnsemble{O}(trees, info; parity_func) :
+        PasoDecisionEnsemble{O}(trees, weights, info; parity_func)
+end
+
 function pasomodel(
     tree           :: DT.InfoNode{T,O};
-    featurenames   :: Vector{Symbol}=Symbol[],
-    keep_condensed :: Bool=false,
+    featurenames   :: Union{Nothing,Vector{Symbol}}=nothing,
 )::PasoDecisionTree where {T,O}
-    isempty(featurenames) && (featurenames = get_featurenames(tree))
-    classlabels  = hasproperty(tree.info, :classlabels) ? get_classlabels(tree) : SoleModels.Label[]
-
-    root, info = begin
-        if keep_condensed
-            root = pasomodel(tree.node, featurenames; classlabels)
-            # anche qui: niente info
-            # info = (;
-            #     apply_preprocess=(y -> UInt32(findfirst(x -> x == y, classlabels))),
-            #     apply_postprocess=(y -> classlabels[y]),
-            # )
-            info = (;)
-            root, info
-        else
-            root = pasomodel(tree.node, featurenames; classlabels)
-            info = (;)
-            root, info
-        end
-    end
-
-    # info = merge(info, (;
-    #         featurenames=featurenames,
-    #         supporting_predictions=root.info[:supporting_predictions],
-    #         supporting_labels=root.info[:supporting_labels],
-    #     )
-    # )
+    isnothing(featurenames) && (featurenames = get_featurenames(tree))
+    classlabels = hasproperty(tree.info, :classlabels) ? get_classlabels(tree) : SX.Label[]
+    info= (
+        supporting_predictions=SX.CLabel[],
+        supporting_labels=SX.CLabel[],
+        featurenames=Symbol[],
+        classlabels=Symbol[]
+    )
+    root = pasomodel(tree.node, Ref(info); featurenames, classlabels)
 
     PasoDecisionTree(root, info)
 end
 
 function pasomodel(
     tree         :: DT.Node,
-    featurenames :: Vector{Symbol};
-    classlabels  :: AbstractVector{<:SoleModels.Label}=SoleModels.Label[],
-)::Branch
+    info         :: Base.RefValue{<:NamedTuple};
+    featurenames :: Vector{Symbol},
+    classlabels  :: AbstractVector{<:SX.Label}=SX.Label[],
+)::PasoBranch
     cond = get_condition(tree.featid, tree.featval, featurenames)
     antecedent = Atom(cond)
-    lefttree  = pasomodel(tree.left, featurenames; classlabels )
-    righttree = pasomodel(tree.right, featurenames; classlabels )
+    lefttree  = pasomodel(tree.left, info; featurenames, classlabels )
+    righttree = pasomodel(tree.right, info; featurenames, classlabels )
 
-    # a costo di ripetermi...
-    # info = (;
-    #     supporting_predictions = [lefttree.info[:supporting_predictions]..., righttree.info[:supporting_predictions]...],
-    #     supporting_labels = [lefttree.info[:supporting_labels]..., righttree.info[:supporting_labels]...],
-    # )
-    info = (;)
-
-    return Branch(antecedent, lefttree, righttree, info)
+    return PasoBranch(antecedent, lefttree, righttree, info)
 end
 
 function pasomodel(
     tree         :: DT.Leaf,
-                 :: Vector{Symbol};
-    classlabels  :: AbstractVector{<:SoleModels.Label}=SoleModels.Label[]
-)::ConstantModel
-    prediction, labels = isempty(classlabels) ? 
-        (tree.majority, tree.values) : 
-        (classlabels[tree.majority], classlabels[tree.values])
+    info         :: Base.RefValue{<:NamedTuple};
+    featurenames :: Vector{Symbol},
+    classlabels  :: AbstractVector{<:SX.Label}=SX.Label[]
+)::PasoConstantModel
+    prediction = isempty(classlabels) ? tree.majority : classlabels[tree.majority]
 
-    # ci siamo capiti
-    # info = (;
-    #     supporting_predictions = fill(prediction, length(labels)),
-    #     supporting_labels = labels,
-    # )
-    info = (;)
-
-    SoleModels.ConstantModel(prediction, info)
+    PasoConstantModel(prediction, info)
 end
 
 # ---------------------------------------------------------------------------- #
-#                           nuova funzione apply!                              #
+featurenames = MLJ.report(ds.mach).features
+solem = pasomodel(MLJ.fitted_params(ds.mach).tree; featurenames);
+
+@btime pasomodel(MLJ.fitted_params(ds.mach).tree; featurenames);
+# 5.093 μs (98 allocations: 4.34 KiB)
+@btime solemodel(MLJ.fitted_params(ds.mach).tree; featurenames);
+# 14.260 μs (139 allocations: 10.94 KiB)
+
+ds = setup_dataset(
+    Xc, yc;
+    model=RandomForestClassifier(),
+    resample=Holdout(shuffle=true),
+        train_ratio=0.7,
+        rng=Xoshiro(1),   
+)
+train, test = get_train(ds.pidxs[1]), get_test(ds.pidxs[1])
+X_test, y_test = get_X(ds)[test, :], get_y(ds)[test]
+MLJ.fit!(ds.mach, rows=train, verbosity=0)
+classlabels  = ds.mach.fitresult[2][sortperm((ds.mach).fitresult[3])]
+featurenames = MLJ.report(ds.mach).features
+@btime pasomodel(MLJ.fitted_params(ds.mach).forest; featurenames);
+# 308.047 μs (3322 allocations: 128.24 KiB)
+@btime solemodel(MLJ.fitted_params(ds.mach).forest; featurenames);
+# 1.287 ms (6452 allocations: 436.05 KiB)
+
 # ---------------------------------------------------------------------------- #
-# ERROR: type NamedTuple has no field supporting_labels
-# bisogna modificare leggermente l'apply! esistente in modo che non vada a cercare
-# field che abbiamo volutamente lasciato vuoti
-# e che accetti, almeno per ora, PasoDecisionTree
 pasoroot(m::PasoDecisionTree) = m.root
 models(m::PasoDecisionEnsemble) = m.models
 
@@ -171,6 +359,7 @@ function weighted_aggregation(m::PasoDecisionEnsemble)
     end
 end
 
+# ---------------------------------------------------------------------------- #
 function pasoapply!(
     m::PasoDecisionEnsemble,
     d::SoleModels.AbstractInterpretationSet,
@@ -180,22 +369,12 @@ function pasoapply!(
     suppress_parity_warning = false,
     kwargs...
 )
-    y = SoleModels.__apply_pre(m, d, y)
-
     preds = hcat([pasoapply!(subm, d, y; mode, leavesonly, kwargs...) for subm in models(m)]...)
-
-    preds = SoleModels.__apply_post(m, preds)
-
     preds = [
         weighted_aggregation(m)(preds[i,:]; suppress_parity_warning, kwargs...)
         for i in 1:size(preds,1)
     ]
 
-    preds = SoleModels.__apply_pre(m, d, preds)
-    # return __pasoapply!(m, mode, preds, y, leavesonly)
-    # giunto a questo punto io avrò tutte le predizioni finali,
-    # quindi è giunto il momento di scrivere in root la struttura info
-    # con supporting_labels e supporting_predictions.
     m.info  = set_predictions(m.info, preds, y)
     return nothing
 end
@@ -208,39 +387,29 @@ function pasoapply!(
     leavesonly = false,
     kwargs...
 )
-    y = SoleModels.__apply_pre(m, d, y)
     preds = pasoapply!(pasoroot(m), d, y;
         mode = mode,
         leavesonly = leavesonly,
         kwargs...
     )
-    # return __pasoapply!(m, mode, preds, y, leavesonly)
-    # giunto a questo punto io avrò tutte le predizioni finali,
-    # quindi è giunto il momento di scrivere in root la struttura info
-    # con supporting_labels e supporting_predictions.
+
     m.info  = set_predictions(m.info, preds, y)
     return nothing
 end
 
 function pasoapply!(
-    m::Branch,
+    m::PasoBranch,
     d::SoleModels.AbstractInterpretationSet,
     y::AbstractVector;
     check_args::Tuple = (),
     check_kwargs::NamedTuple = (;),
     mode = :replace,
     leavesonly = false,
-    # show_progress = true,
     kwargs...
 )
     # @assert length(y) == ninstances(d) "$(length(y)) == $(ninstances(d))"
-    if mode == :replace
-        # non è più  necessario: si parte già con tutto vuoto
-        # SoleModels.recursivelyemptysupports!(m, leavesonly)
-        mode = :append
-    end
-    checkmask = SoleModels.checkantecedent(m, d, check_args...; check_kwargs...)
-    preds = Vector{outputtype(m)}(undef,length(checkmask))
+    checkmask = pasocheckantecedent(m, d, check_args...; check_kwargs...)
+    preds = Vector{outcometype(m)}(undef,length(checkmask)) ## HACKERATA da non copiare
     @sync begin
         if any(checkmask)
             l = Threads.@spawn pasoapply!(
@@ -249,7 +418,7 @@ function pasoapply!(
                 y[checkmask];
                 check_args = check_args,
                 check_kwargs = check_kwargs,
-                mode = mode,
+                # mode = mode,
                 leavesonly = leavesonly,
                 kwargs...
             )
@@ -262,7 +431,7 @@ function pasoapply!(
                 y[ncheckmask];
                 check_args = check_args,
                 check_kwargs = check_kwargs,
-                mode = mode,
+                # mode = mode,
                 leavesonly = leavesonly,
                 kwargs...
             )
@@ -274,50 +443,18 @@ function pasoapply!(
             preds[ncheckmask] .= fetch(r)
         end
     end
-    return __pasoapply!(m, mode, preds, y, leavesonly)
+    return preds
 end
 
 function pasoapply!(
-    m::ConstantModel,
+    m::PasoConstantModel,
     d::SoleModels.AbstractInterpretationSet,
     y::AbstractVector;
-    mode = :replace,
-    leavesonly = false,
+    # mode = :replace,
+    # leavesonly = false,
     kwargs...
 )
-    if mode == :replace
-        # non serve più
-        # SoleModels.recursivelyemptysupports!(m, leavesonly)
-        mode = :append
-    end
     preds = fill(outcome(m), ninstances(d))
-
-    return __pasoapply!(m, mode, preds, y, leavesonly)
-end
-
-# questa funzione scrive la predizione nel campo 'supporting_prediction'
-# che attualmente non è presente.
-# quello che vorrei fare io, nell'apply, non è riempire tutte le 'info', ma propagare la 
-# predizione fino alla root
-function __pasoapply!(m, mode, preds, y, leavesonly)
-    if !leavesonly || m isa LeafModel
-        if mode == :replace
-            if haskey(m.info, :supporting_predictions)
-                # empty!(m.info.supporting_predictions)
-                # append!(m.info.supporting_predictions, preds)
-            end
-            # empty!(m.info.supporting_labels)
-            # append!(m.info.supporting_labels, y)
-        elseif mode == :append
-            if haskey(m.info, :supporting_predictions)
-                # append!(m.info.supporting_predictions, preds)
-            end
-            # append!(m.info.supporting_labels, y)
-        else
-            error("Unexpected apply mode: $mode.")
-        end
-    end
-    preds = SoleModels.__apply_post(m, preds)
 
     return preds
 end
@@ -423,6 +560,8 @@ model_old = symbolic_analysis(
     )
 end
 # 315.291 μs (3013 allocations: 214.52 KiB)
+# con Ref migliora leggermente
+# 314.580 μs (2992 allocations: 212.86 KiB)
 
 @btime symbolic_analysis(
     Xc, yc,
@@ -479,6 +618,8 @@ model_old = symbolic_analysis(
     )
 end
 # 8.548 ms (96136 allocations: 4.92 MiB)
+# e quadagnamo pure qui
+# 7.896 ms (91382 allocations: 4.60 MiB)
 
 @btime symbolic_analysis(
     Xc, yc,
@@ -490,11 +631,6 @@ end
 )
 # 14.716 ms (183395 allocations: 9.30 MiB)
 
-# Come potete vedere, se usando alberi decisionali i miglioramenti di prestazioni sono pressochè
-# trascurabili, se passiamo a strutture più complesse, come le foreste,
-# i miglioramenti sono enormi.
-# E questo su un esperimento giocattolo, pensatelo su un esperimento reale!
-# Non è finita qui però: rimane ancora il problema della listrule:
 # funzionerà ancora? sulla carta potremmo dire di si, verifichiamolo con
 # una battuta di test come fatto all'inizio:
 function _pasorules(
@@ -573,87 +709,3 @@ for seed in 1:50
         @test test_original[i].consequent.outcome == test_paso[i].consequent.outcome
     end
 end
-
-# ---------------------------------------------------------------------------- #
-#                                  Conclusione                                 #
-# ---------------------------------------------------------------------------- #
-# abbiamo dimostrato che SoleModels può essere migliorato in termini di efficenza
-# con ampio margine, senza che le funzionalità da me trovate, vengano compromesse.
-
-# C'è però l'ultimo punto: ed è il vostro benestare.
-
-# Ho totalmente stravolto la creazione di un albero sole andando ad intaccare quella 
-# che è la sua struttura base.
-# Ne ho scalfito la superficie sperando che non vi fosse nulla sotto.
-# Ora chiedo a voi se questo lavoro ha senso, è pericoloso, oppure va ad intaccare funzionalità
-# che non ho preso in considerazione per mera ignoranza.
-
-# Vi ringrazio anticipatamente per la pazienza e per qualsiasi dubbio o domanda
-# non esitate a scrivermi.
-# Se siete in vacanza guai a voi se mi scrivete, riposatevi!
-
-
-# qui ho lasciato del codice commentato che forse potrà servire in futuro
-# ---------------------------------------------------------------------------- #
-#                     DecisionTree apply from DataFrame X                      #
-# ---------------------------------------------------------------------------- #
-# get_featid(s::Branch) = s.antecedent.value.metacond.feature.i_variable
-# get_cond(s::Branch)   = s.antecedent.value.metacond.test_operator
-# get_thr(s::Branch)    = s.antecedent.value.threshold
-
-# function set_predictions(
-#     info  :: NamedTuple,
-#     preds :: Vector{T},
-#     y     :: AbstractVector{S}
-# )::NamedTuple where {T,S<:SoleModels.Label}
-#     merge(info, (supporting_predictions=preds, supporting_labels=y))
-# end
-
-# function pasoapply!(
-#     solem :: PasoDecisionEnsemble{O,T,A,W},
-#     X     :: AbstractDataFrame,
-#     y     :: AbstractVector;
-#     suppress_parity_warning::Bool=false
-# )::Nothing where {O,T,A,W}
-#     predictions = permutedims(hcat([pasoapply(s, X, y) for s in get_models(solem)]...))
-#     predictions = aggregate(solem, predictions, suppress_parity_warning)
-#     solem.info  = set_predictions(solem.info, predictions, y)
-#     return nothing
-# end
-
-# function pasoapply!(
-#     solem :: PasoDecisionTree{T},
-#     X     :: AbstractDataFrame,
-#     y     :: AbstractVector{S}
-# )::Nothing where {T, S<:SoleModels.Label}
-#     predictions = [pasoapply(solem.root, x) for x in eachrow(X)]
-#     solem.info  = set_predictions(solem.info, predictions, y)
-#     return nothing
-# end
-
-# function pasoapply(
-#     solebranch :: Branch{T},
-#     X          :: AbstractDataFrame,
-#     y          :: AbstractVector{S}
-# ) where {T, S<:SoleModels.Label}
-#     predictions     = SoleModels.Label[pasoapply(solebranch, x) for x in eachrow(X)]
-#     solebranch.info = set_predictions(solebranch.info, predictions, y)
-#     return predictions
-# end
-
-# function pasoapply(
-#     solebranch :: Branch{T},
-#     x          :: DataFrameRow
-# )::T where T
-#     featid, cond, thr = get_featid(solebranch), get_cond(solebranch), get_thr(solebranch)
-#     feature_value     = x[featid]
-#     condition_result  = cond(feature_value, thr)
-    
-#     return condition_result ?
-#         pasoapply(solebranch.posconsequent, x) :
-#         pasoapply(solebranch.negconsequent, x)
-# end
-
-# function pasoapply(leaf::ConstantModel{T}, ::DataFrameRow)::T where T
-#     leaf.outcome
-# end
