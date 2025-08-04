@@ -33,7 +33,7 @@ mutable struct S
     info::NamedTuple
 
     function S(p)
-        info = (featurenames=[],supporting_predictions=[],supporting_labels=[])
+        info = (supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[])
         info_ref = Ref(info)
         new(p, info_ref)
     end

@@ -15,28 +15,25 @@ ds = modelc.ds
 # ---------------------------------------------------------------------------- #
 struct PasoConstantModel{O} <: LeafModel{O}
     outcome::O
-    info::Base.RefValue{<:NamedTuple}
 
     function PasoConstantModel{O}(
         outcome::O2,
-        info::Base.RefValue{<:NamedTuple}
     ) where {O,O2}
-        new{O}(convert(O, outcome), info)
+        new{O}(convert(O, outcome))
     end
 
     function PasoConstantModel(
         outcome::O,
-        info::Base.RefValue{<:NamedTuple}
     ) where {O}
-        PasoConstantModel{O}(outcome, info)
+        PasoConstantModel{O}(outcome)
     end
 
     function PasoConstantModel{O}(m::PasoConstantModel) where {O}
-        PasoConstantModel{O}(m.outcome, m.info)
+        PasoConstantModel{O}(m.outcome)
     end
 
     function PasoConstantModel(m::PasoConstantModel)
-        PasoConstantModel(m.outcome, m.info)
+        PasoConstantModel(m.outcome)
     end
 end
 
@@ -49,39 +46,35 @@ struct PasoBranch{O} <: AbstractModel{O}
     antecedent::Formula
     posconsequent::M where {M<:AbstractModel{<:O}}
     negconsequent::M where {M<:AbstractModel{<:O}}
-    info::Base.RefValue{<:NamedTuple}
 
     function PasoBranch{O}(
         antecedent::Formula,
         posconsequent::Any,
-        negconsequent::Any,
-        info::Base.RefValue{<:NamedTuple}
+        negconsequent::Any
     ) where {O}
         A = typeof(antecedent)
         posconsequent = wrap(posconsequent)
         negconsequent = wrap(negconsequent)
-        new{O}(antecedent, posconsequent, negconsequent, info)
+        new{O}(antecedent, posconsequent, negconsequent)
     end
 
     function PasoBranch(
         antecedent::Formula,
         posconsequent::Any,
-        negconsequent::Any,
-        info::Base.RefValue{<:NamedTuple}
+        negconsequent::Any
     )
         A = typeof(antecedent)
         posconsequent = wrap(posconsequent)
         negconsequent = wrap(negconsequent)
         O = Union{outcometype(posconsequent),outcometype(negconsequent)}
-        PasoBranch{O}(antecedent, posconsequent, negconsequent, info)
+        PasoBranch{O}(antecedent, posconsequent, negconsequent)
     end
 
     function PasoBranch(
         antecedent::Formula,
-        (posconsequent, negconsequent)::Tuple{Any,Any},
-        info::Base.RefValue{<:NamedTuple}
+        (posconsequent, negconsequent)::Tuple{Any,Any}  
     )
-        PasoBranch(antecedent, posconsequent, negconsequent, info)
+        PasoBranch(antecedent, posconsequent, negconsequent)
     end
 end
 
@@ -117,17 +110,17 @@ pasocheckantecedent(
 ) = check(antecedent(m), d, args...; kwargs...)
 
 # ---------------------------------------------------------------------------- #
-struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Union{Nothing,AbstractVector}} <: SoleModels.AbstractDecisionEnsemble{O}
+mutable struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Union{Nothing,AbstractVector}} <: SoleModels.AbstractDecisionEnsemble{O}
     models::Vector{T}
     aggregation::A
     weights::W
-    info::Base.RefValue{<:NamedTuple}
+    info::NamedTuple
 
     function PasoDecisionEnsemble{O}(
         models::AbstractVector{T},
         aggregation::Union{Nothing,Base.Callable},
         weights::Union{Nothing,AbstractVector},
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[]);
+        info::NamedTuple=(;);
         suppress_parity_warning=false,
         parity_func=x->argmax(x)
     ) where {O,T<:AbstractModel}
@@ -141,17 +134,15 @@ struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Union{Nothing
         # T = typeof(models)
         W = typeof(weights)
         A = typeof(aggregation)
-        info_ref = Ref(info)
-        new{O,T,A,W}(collect(models), aggregation, weights, info_ref)
+        new{O,T,A,W}(collect(models), aggregation, weights, info)
     end
     
     function PasoDecisionEnsemble{O}(
         models::AbstractVector;
         kwargs...
     ) where {O}
-        info = (supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[])
-        info_ref = Ref(info)
-        PasoDecisionEnsemble{O}(models, nothing, nothing, info_ref; kwargs...)
+        info=(;)
+        PasoDecisionEnsemble{O}(models, nothing, nothing, info; kwargs...)
     end
 
     function PasoDecisionEnsemble{O}(
@@ -159,24 +150,22 @@ struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Union{Nothing
         info::NamedTuple;
         kwargs...
     ) where {O}
-        info_ref = Ref(info)
-        PasoDecisionEnsemble{O}(models, nothing, nothing, info_ref; kwargs...)
+        PasoDecisionEnsemble{O}(models, nothing, nothing, info; kwargs...)
     end
 
     function PasoDecisionEnsemble{O}(
         models::AbstractVector,
         aggregation::Union{Nothing,Base.Callable},
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[]);
+        info::NamedTuple=(;);
         kwargs...
     ) where {O}
-        info_ref = Ref(info)
         PasoDecisionEnsemble{O}(models, aggregation, nothing, info; kwargs...)
     end
 
     function PasoDecisionEnsemble{O}(
         models::AbstractVector,
         weights::AbstractVector,
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[]);
+        info::NamedTuple=(;);
         kwargs...
     ) where {O}
         PasoDecisionEnsemble{O}(models, nothing, weights, info; kwargs...)
@@ -195,19 +184,18 @@ end
 
 mutable struct PasoDecisionTree{O} <: AbstractModel{O}
     root::Union{LeafModel{O},PasoBranch{O}}
-    info::Base.RefValue{<:NamedTuple}
+    info::NamedTuple
 
     function PasoDecisionTree(
         root::Union{LeafModel{O},PasoBranch{O}},
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[])
+        info::NamedTuple=(;)
     ) where {O}
-        info_ref = Ref(info)
-        new{O}(root, info_ref)
+        new{O}(root, info)
     end
 
     function PasoDecisionTree(
         root::Any,
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[])
+        info::NamedTuple=(;)
     )
         root = wrap(root)
         M = typeof(root)
@@ -217,20 +205,18 @@ mutable struct PasoDecisionTree{O} <: AbstractModel{O}
             "type $(typeof(root)). Note that the should be either a LeafModel or a " *
             "PasoBranch. " *
             "$(M) <: $(Union{LeafModel,PasoBranch{<:O}}) should hold."
-        info_ref = Ref(info)
-        new{O}(root, info_ref)
+        new{O}(root, info)
     end
 
     function PasoDecisionTree(
         antecedent::Formula,
         posconsequent::Any,
         negconsequent::Any,
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[])
+        info::NamedTuple=(;)
     )
         posconsequent isa PasoDecisionTree && (posconsequent = root(posconsequent))
         negconsequent isa PasoDecisionTree && (negconsequent = root(negconsequent))
-        info_ref = Ref(info)
-        return PasoDecisionTree(PasoBranch(antecedent, posconsequent, negconsequent, info_ref), info_ref)
+        return PasoDecisionTree(PasoBranch(antecedent, posconsequent, negconsequent, Ref(info)), info)
     end
 end
 
@@ -259,18 +245,13 @@ function pasomodel(
     parity_func    :: Base.Callable=x->first(sort(collect(keys(x))))
 )::PasoDecisionEnsemble where {T,O}
     isempty(featurenames) && (featurenames = get_featurenames(model))
-    info= (
-        supporting_predictions=SX.CLabel[],
-        supporting_labels=SX.CLabel[],
-        featurenames=Symbol[],
-        classlabels=Symbol[]
-    )
+    info= (;)
 
-    trees = map(t -> pasomodel(t, Ref(info); featurenames, classlabels), model.trees)
+    trees = map(t -> pasomodel(t; featurenames, classlabels), model.trees)
 
     isnothing(weights) ?
-        PasoDecisionEnsemble{O}(trees, info; parity_func) :
-        PasoDecisionEnsemble{O}(trees, weights, info; parity_func)
+        PasoDecisionEnsemble{O}(trees; parity_func) :
+        PasoDecisionEnsemble{O}(trees, weights; parity_func)
 end
 
 function pasomodel(
@@ -279,40 +260,34 @@ function pasomodel(
 )::PasoDecisionTree where {T,O}
     isnothing(featurenames) && (featurenames = get_featurenames(tree))
     classlabels = hasproperty(tree.info, :classlabels) ? get_classlabels(tree) : SX.Label[]
-    info= (
-        supporting_predictions=SX.CLabel[],
-        supporting_labels=SX.CLabel[],
-        featurenames=Symbol[],
-        classlabels=Symbol[]
-    )
-    root = pasomodel(tree.node, Ref(info); featurenames, classlabels)
+    info= (;)
+
+    root = pasomodel(tree.node; featurenames, classlabels)
 
     PasoDecisionTree(root, info)
 end
 
 function pasomodel(
-    tree         :: DT.Node,
-    info         :: Base.RefValue{<:NamedTuple};
+    tree         :: DT.Node;
     featurenames :: Vector{Symbol},
     classlabels  :: AbstractVector{<:SX.Label}=SX.Label[],
 )::PasoBranch
     cond = get_condition(tree.featid, tree.featval, featurenames)
     antecedent = Atom(cond)
-    lefttree  = pasomodel(tree.left, info; featurenames, classlabels )
-    righttree = pasomodel(tree.right, info; featurenames, classlabels )
+    lefttree  = pasomodel(tree.left; featurenames, classlabels )
+    righttree = pasomodel(tree.right; featurenames, classlabels )
 
-    return PasoBranch(antecedent, lefttree, righttree, info)
+    return PasoBranch(antecedent, lefttree, righttree)
 end
 
 function pasomodel(
-    tree         :: DT.Leaf,
-    info         :: Base.RefValue{<:NamedTuple};
+    tree         :: DT.Leaf;
     featurenames :: Vector{Symbol},
     classlabels  :: AbstractVector{<:SX.Label}=SX.Label[]
 )::PasoConstantModel
     prediction = isempty(classlabels) ? tree.majority : classlabels[tree.majority]
 
-    PasoConstantModel(prediction, info)
+    PasoConstantModel(prediction)
 end
 
 # ---------------------------------------------------------------------------- #
@@ -320,7 +295,7 @@ featurenames = MLJ.report(ds.mach).features
 solem = pasomodel(MLJ.fitted_params(ds.mach).tree; featurenames);
 
 @btime pasomodel(MLJ.fitted_params(ds.mach).tree; featurenames);
-# 5.093 μs (98 allocations: 4.34 KiB)
+# 5.013 μs (91 allocations: 3.67 KiB)
 @btime solemodel(MLJ.fitted_params(ds.mach).tree; featurenames);
 # 14.260 μs (139 allocations: 10.94 KiB)
 
@@ -337,7 +312,7 @@ MLJ.fit!(ds.mach, rows=train, verbosity=0)
 classlabels  = ds.mach.fitresult[2][sortperm((ds.mach).fitresult[3])]
 featurenames = MLJ.report(ds.mach).features
 @btime pasomodel(MLJ.fitted_params(ds.mach).forest; featurenames);
-# 308.047 μs (3322 allocations: 128.24 KiB)
+# 280.956 μs (3216 allocations: 89.34 KiB)
 @btime solemodel(MLJ.fitted_params(ds.mach).forest; featurenames);
 # 1.287 ms (6452 allocations: 436.05 KiB)
 
