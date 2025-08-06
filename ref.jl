@@ -14,11 +14,16 @@ root = modelc.sole[1].root
 info = (featurenames=[],supporting_predictions=[],supporting_labels=[])
 info_ref = Ref(info)
 
-struct P
-    s::SX.Branch
+mutable struct Sb
+    info::Base.RefValue{<:NamedTuple}
+
+    Sb(s) = new(s)
+end
+
+struct PP
     i::Base.RefValue{<:NamedTuple}
 
-    P(s) = new(s, info_ref)  # Use the shared reference
+    PP(s) = new(s)  # Use the shared reference
 end
 
 a = P(root)

@@ -1,3 +1,105 @@
+# La prossima volta che mi si proporrà di referenziare una varabile,
+# giuro espatrio.
+# é stata una fatica enorme, ho dovuto rivedere molto codice,
+# ma alla fine ce l'ho fatta.
+
+# ---------------------------------------------------------------------------- #
+# Prefazione:
+# ---------------------------------------------------------------------------- #
+# abbiamo visto che, nella costruzione dell'albero, o della foresta,
+# ad ogni nodo e ad ogni foglia viene aggiunta una namedtuple 'info'
+# contenente i vettori delle predizioni e delle label, in più,
+# per eleganza di stampa, anche i vettori di feature names e class labels.
+# Si tratta di una soluzione elegante ma pesantissima in termini di memoria
+# e, soprattutto, estremamente ridondante in quanto la namedtuple 'info'
+# è identica in ogni modo/foglia.
+
+# ---------------------------------------------------------------------------- #
+# Idee proposte:
+# ---------------------------------------------------------------------------- #
+# 1-eliminare la namedtuple 'info', tenere solo quella in 'root'.
+# è sicuramente la soluzione più rapida, efficente ma rischiosa.
+# Se abbiamo visto che funzioni come 'listrules' sono facilmente modificabili,
+# per usare unicamente la 'info' in root,
+# non posso dire, a priori, altrettanto per funzioni come 'readmetrics'
+# le quali lavorano anche a livello di nodi e foglie, non solo di root.
+# nel caso si decidesse di proseguire con questa soluzione,
+# andrebbero riviste quelle funzioni.
+# Il problema è che, come sempre a priori,
+# io non posso sapere se qualcuno di voi utilizza le readmetrics magari
+# per analizzare parte di un albero, magari senza per forza caricarlo tutto in memoria,
+# e quindi non potendo avere accesso alla 'info' in root.
+
+# 2-Referenziare 'info'.
+# questa è la soluzione proposta da Gio e Marco che ho voluto seguire.
+# sappiamo che è breaking, in quanto avremo un albero/foresta con un campo
+# non più NamedTuple, ma Ref(NamedTuple), il che significa che tutto il codice 
+# che lavora con il campo 'info' andrà rivisto.
+# Però in questo caso la soluzione è più semplice del caso precedente perchè 
+# non siamo più dipendenti dalla 'root': in ogni nodo/foglia
+# avremo un riferimento alla 'info' di root,
+# semplicemente dovremo accedervi con info[].campo_richiesto anzichè info.campo_richiesto.
+# sembra facile.
+# In più questa soluzione mantiene il concetto originale con cui avete sviluppato gli
+# alberi in Sole e quindi, sulla carta, dovrebbe essere meno breaking.
+
+# ---------------------------------------------------------------------------- #
+# Referenziamo 'info'
+# Difficoltà incontrate:
+# ---------------------------------------------------------------------------- #
+# 1-l'albero viene costruito in ricorsione.
+# quindi ci troviamo di fronte ad un bel problema: se devo referenziare 'info' in 'root'
+# è banale notare che la root sara istanziata per ultima, e quindi non è
+# possibile referenziare qualcosa che vedrà la luce solo in futuro.
+
+# 2-IPOTESI non VERIFICATA
+# potrei creare, all'interno della funzione 'solemodels' una namedtuple 'info' vuota,
+# referenziarla e passare la Ref a tutto l'albero.
+# Non l'ho provata, ma concettualmente non mi piace molto:
+# andrei a referenziare una variabile locale ad una funzione, che poi verrà cancellata
+# una volta conclusa la funzione.
+# Ne rimarrebbe il riferimento nell'albero, ma mi sembra tutt'altro che elegante.
+
+# 3-Sentinella.
+# parlando con Mauro, mi ha consigliato di usare un sentinella.
+# Mi sembra una soluzione interessante ed elegante, che ho sviluppato in questo modo:
+# - prima di creare l'albero, istanzio una struttura 'albero',
+# quindi o una DecisionTree o una DecisionEnsemble, VUOTA.
+# assegno a questa struttura il campo 'info' da referenziare.
+# - costruisco l'albero in ricorsione, assegnando ad ogni nodo il riferimento alla 'info'
+# già creata.
+# - anzichè ritornare una struttura nuova, innesto l'albero nel campo a lui designato
+# nella struttura precedentemente creata.
+
+# 4-Ora quando eseguirò l'apply! sulla struttura, modificherà solamente 'info' di 'root',
+# ma di reference tutte le modifiche vengono viste da ogni nodo/foglia.
+
+# ---------------------------------------------------------------------------- #
+# benchmark e considerazioni
+# ---------------------------------------------------------------------------- #
+# La modifica proposta funziona e abbiamo, come atteso, un crollo del consumo di memoria:
+# in fondo al file troverete gli esperimenti di benchmark, qui commento solo i
+# risultati:
+# l'esperimento su Iris, RandomForest da 100 alberi, con il codice originale
+# era di: 15.084 ms (183395 allocations: 9.30 MiB)
+# mentre lo stesso esperimento, con gli stessi risultati, ma con le 'info' referenziate
+# è di: 10.552 ms (104009 allocations: 5.84 MiB)
+# un terzo più veloce, e quasi la metà delle allocazioni e memoria utilizzata.
+# Niente male direi!
+# Oltre a questo c'è un altro vantaggio enorme: 
+# la forbice aumenta con l'aumentare della complessità del modello: 
+# nel codice originale maggiore complessità = maggior numero di campi 'info'
+# nel codice nuovo il campo 'info' è indipendente dalla complessità: è sempre e solo uno.
+
+# Per vostra informazione: ho fatto anche la versione senza campi 'info': 
+# ero curioso di vedere quanto meglio performasse.
+# Effettivamente è un pochetto meglio, ma non abbastanza da proporvi questa soluzione.
+
+# Fra tutte le prove che ho fatto, questa soluzione eccelle in termini di risparmio memoria.
+
+# Se saremo tutti d'accordo, mi occuperò di fare una PR per SoleModels, non prima di averne anche verificato
+# la solidità dei test.
+
 using SoleXplorer
 using SoleModels
 using MLJ
@@ -11,6 +113,36 @@ Xc = DataFrame(Xc)
 
 modelc = symbolic_analysis(Xc, yc)
 ds = modelc.ds
+
+const InfoStruct = (
+    supporting_predictions=[],
+    supporting_labels=[],
+    featurenames=[],
+    classlabels=[]
+)
+
+# ---------------------------------------------------------------------------- #
+const Branch_or_Leaf{O} = Union{Branch{O}, LeafModel{O}}
+
+default_parity_func = x->argmax(x)
+DT_parity_func = x->first(sort(collect(keys(x))))
+
+# to be used in case of UInt32
+# default_parity_func = x->mode(x)
+# DT_parity_func = x->mode(sort(x))
+
+function set_aggregation(
+    aggregation::Union{Nothing,Base.Callable}=nothing;
+    parity_func::Base.Callable=default_parity_func
+)::Base.Callable
+    if isnothing(aggregation)
+        aggregation = function (args...; suppress_parity_warning, kwargs...)
+            SoleModels.bestguess(args...; suppress_parity_warning, parity_func, kwargs...)
+        end
+    end
+
+    return aggregation
+end
 
 # ---------------------------------------------------------------------------- #
 struct PasoConstantModel{O} <: LeafModel{O}
@@ -117,19 +249,20 @@ pasocheckantecedent(
 ) = check(antecedent(m), d, args...; kwargs...)
 
 # ---------------------------------------------------------------------------- #
-struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Union{Nothing,AbstractVector}} <: SoleModels.AbstractDecisionEnsemble{O}
-    models::Vector{T}
-    aggregation::A
-    weights::W
+mutable struct PasoDecisionEnsemble{O} <: SoleModels.AbstractDecisionEnsemble{O}
+    models::Union{Nothing,Vector{<:AbstractModel}}
+    aggregation::Base.Callable
+    weights::Union{Nothing,AbstractVector}
     info::Base.RefValue{<:NamedTuple}
+    featim::Vector{<:Real}
 
     function PasoDecisionEnsemble{O}(
         models::AbstractVector{T},
         aggregation::Union{Nothing,Base.Callable},
         weights::Union{Nothing,AbstractVector},
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[]);
-        suppress_parity_warning=false,
-        parity_func=x->argmax(x)
+        info::Base.RefValue{<:NamedTuple};
+        suppress_parity_warning::Bool=false,
+        parity_func::Base.Callable=x->argmax(x),
     ) where {O,T<:AbstractModel}
         @assert length(models) > 0 "Cannot instantiate empty ensemble!"
         models = wrap.(models)
@@ -139,44 +272,49 @@ struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Union{Nothing
             !suppress_parity_warning || @warn "Unexpected value for suppress_parity_warning: $(suppress_parity_warning)."
         end
         # T = typeof(models)
-        W = typeof(weights)
-        A = typeof(aggregation)
-        info_ref = Ref(info)
-        new{O,T,A,W}(collect(models), aggregation, weights, info_ref)
+        # W = typeof(weights)
+        # A = typeof(aggregation)
+        new{O}(collect(models), aggregation, weights, info, Float64[])
+    end
+
+    function PasoDecisionEnsemble{O}(
+        info::Base.RefValue{<:NamedTuple},
+        aggregation::Union{Nothing,Base.Callable}=nothing;
+        featim::Vector{<:Real},
+        parity_func::Base.Callable=default_parity_func
+    ) where {O<:DT.Ensemble}
+        new{O}(nothing, set_aggregation(aggregation; parity_func), nothing, info, featim)
     end
     
     function PasoDecisionEnsemble{O}(
         models::AbstractVector;
         kwargs...
     ) where {O}
-        info = (supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[])
-        info_ref = Ref(info)
-        PasoDecisionEnsemble{O}(models, nothing, nothing, info_ref; kwargs...)
+        info = InfoStruct
+        PasoDecisionEnsemble{O}(models, nothing, nothing, info; kwargs...)
     end
 
     function PasoDecisionEnsemble{O}(
         models::AbstractVector,
-        info::NamedTuple;
+        info::Base.RefValue{<:NamedTuple};
         kwargs...
     ) where {O}
-        info_ref = Ref(info)
-        PasoDecisionEnsemble{O}(models, nothing, nothing, info_ref; kwargs...)
+        PasoDecisionEnsemble{O}(models, nothing, nothing, info; kwargs...)
     end
 
     function PasoDecisionEnsemble{O}(
         models::AbstractVector,
         aggregation::Union{Nothing,Base.Callable},
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[]);
+        info::Base.RefValue{<:NamedTuple};
         kwargs...
     ) where {O}
-        info_ref = Ref(info)
         PasoDecisionEnsemble{O}(models, aggregation, nothing, info; kwargs...)
     end
 
     function PasoDecisionEnsemble{O}(
         models::AbstractVector,
         weights::AbstractVector,
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[]);
+        info::Base.RefValue{<:NamedTuple};
         kwargs...
     ) where {O}
         PasoDecisionEnsemble{O}(models, nothing, weights, info; kwargs...)
@@ -194,43 +332,46 @@ struct PasoDecisionEnsemble{O,T<:AbstractModel,A<:Base.Callable,W<:Union{Nothing
 end
 
 mutable struct PasoDecisionTree{O} <: AbstractModel{O}
-    root::Union{LeafModel{O},PasoBranch{O}}
+    root::Union{Nothing, R} where {R<:Union{LeafModel{O},PasoBranch{O}}}
     info::Base.RefValue{<:NamedTuple}
 
     function PasoDecisionTree(
         root::Union{LeafModel{O},PasoBranch{O}},
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[])
+        info::Base.RefValue{<:NamedTuple},
     ) where {O}
-        info_ref = Ref(info)
-        new{O}(root, info_ref)
+        new{O}(root, info)
+    end
+
+    function PasoDecisionTree{O}(
+        info::Base.RefValue{<:NamedTuple},
+    ) where {O}
+        new{O}(nothing, info)
     end
 
     function PasoDecisionTree(
         root::Any,
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[])
+        info::Base.RefValue{<:NamedTuple},
     )
         root = wrap(root)
         M = typeof(root)
         O = outcometype(root)
-        @assert M <: Union{LeafModel{O},PasoBranch{O}} "" *
+        @assert M <: Union{LeafModel{O},Branch{O}} "" *
             "Cannot instantiate PasoDecisionTree{$(O)}(...) with root of " *
             "type $(typeof(root)). Note that the should be either a LeafModel or a " *
-            "PasoBranch. " *
-            "$(M) <: $(Union{LeafModel,PasoBranch{<:O}}) should hold."
-        info_ref = Ref(info)
-        new{O}(root, info_ref)
+            "Branch. " *
+            "$(M) <: $(Union{LeafModel,Branch{<:O}}) should hold."
+        new{O}(root, info)
     end
 
     function PasoDecisionTree(
         antecedent::Formula,
         posconsequent::Any,
         negconsequent::Any,
-        info::NamedTuple=(supporting_predictions=[],supporting_labels=[],featurenames=[],classlabels=[])
+        info::Base.RefValue{<:NamedTuple},
     )
         posconsequent isa PasoDecisionTree && (posconsequent = root(posconsequent))
         negconsequent isa PasoDecisionTree && (negconsequent = root(negconsequent))
-        info_ref = Ref(info)
-        return PasoDecisionTree(PasoBranch(antecedent, posconsequent, negconsequent, info_ref), info_ref)
+        return PasoDecisionTree(Branch(antecedent, posconsequent, negconsequent, info))
     end
 end
 
@@ -251,43 +392,58 @@ end
 
 # ---------------------------------------------------------------------------- #
 function pasomodel(
-    model          :: DT.Ensemble{T,O};
-    featurenames   :: Vector{Symbol}=Symbol[],
-    weights        :: Vector{<:Number}=Number[],
-    classlabels    :: AbstractVector{<:SoleModels.Label}=SoleModels.Label[],
-    keep_condensed :: Bool=false,
-    parity_func    :: Base.Callable=x->first(sort(collect(keys(x))))
+    model        :: DT.Ensemble{T,O};
+    featurenames :: Vector{Symbol},
+    classlabels  :: AbstractVector{<:SoleModels.Label},
+    weights      :: Union{Nothing, Vector{<:Number}}=nothing,
+    aggregation  :: Union{Nothing,Base.Callable}=nothing,
+    parity_func  :: Base.Callable=DT_parity_func,
+    suppress_parity_warning::Bool=false
 )::PasoDecisionEnsemble where {T,O}
-    isempty(featurenames) && (featurenames = get_featurenames(model))
-    info= (
-        supporting_predictions=SX.CLabel[],
-        supporting_labels=SX.CLabel[],
-        featurenames=Symbol[],
-        classlabels=Symbol[]
+    isnothing(aggregation) && begin
+        aggregation = function (args...; suppress_parity_warning, kwargs...)
+            SoleModels.bestguess(args...; suppress_parity_warning, parity_func, kwargs...)
+        end
+    end
+
+    classtype = eltype(classlabels)
+    info = (;
+        supporting_labels = classtype[],
+        supporting_predictions = classtype[],
+        featurenames,
+        classlabels
     )
 
-    trees = map(t -> pasomodel(t, Ref(info); featurenames, classlabels), model.trees)
+    solestruct = PasoDecisionEnsemble{typeof(model)}(Ref(info), aggregation; featim=model.featim, parity_func);
+    trees = map(t -> pasomodel(t, solestruct.info; featurenames, classlabels), model.trees);
+    models = wrap.(trees)
+    solestruct.models = collect(models)
+    isnothing(weights) || (solestruct.weights = weights)
 
-    isnothing(weights) ?
-        PasoDecisionEnsemble{O}(trees, info; parity_func) :
-        PasoDecisionEnsemble{O}(trees, weights, info; parity_func)
+    return solestruct
 end
 
 function pasomodel(
     tree           :: DT.InfoNode{T,O};
     featurenames   :: Union{Nothing,Vector{Symbol}}=nothing,
+    classlabels  :: AbstractVector{<:SoleModels.Label}
 )::PasoDecisionTree where {T,O}
-    isnothing(featurenames) && (featurenames = get_featurenames(tree))
-    classlabels = hasproperty(tree.info, :classlabels) ? get_classlabels(tree) : SX.Label[]
-    info= (
-        supporting_predictions=SX.CLabel[],
-        supporting_labels=SX.CLabel[],
-        featurenames=Symbol[],
-        classlabels=Symbol[]
+    classtype = eltype(classlabels)
+    info = (;
+        supporting_labels = classtype[],
+        supporting_predictions = classtype[],
+        featurenames,
+        classlabels
     )
-    root = pasomodel(tree.node, Ref(info); featurenames, classlabels)
 
-    PasoDecisionTree(root, info)
+    solestruct = PasoDecisionTree{eltype(classlabels)}(Ref(info))
+    
+    root = pasomodel(tree.node, solestruct.info; featurenames, classlabels)
+
+    # PasoDecisionTree(root, info)
+    solestruct.root = root
+
+    return solestruct
 end
 
 function pasomodel(
@@ -316,48 +472,23 @@ function pasomodel(
 end
 
 # ---------------------------------------------------------------------------- #
-featurenames = MLJ.report(ds.mach).features
-solem = pasomodel(MLJ.fitted_params(ds.mach).tree; featurenames);
-
-@btime pasomodel(MLJ.fitted_params(ds.mach).tree; featurenames);
-# 5.093 μs (98 allocations: 4.34 KiB)
-@btime solemodel(MLJ.fitted_params(ds.mach).tree; featurenames);
-# 14.260 μs (139 allocations: 10.94 KiB)
-
-ds = setup_dataset(
-    Xc, yc;
-    model=RandomForestClassifier(),
-    resample=Holdout(shuffle=true),
-        train_ratio=0.7,
-        rng=Xoshiro(1),   
-)
-train, test = get_train(ds.pidxs[1]), get_test(ds.pidxs[1])
-X_test, y_test = get_X(ds)[test, :], get_y(ds)[test]
-MLJ.fit!(ds.mach, rows=train, verbosity=0)
-classlabels  = ds.mach.fitresult[2][sortperm((ds.mach).fitresult[3])]
-featurenames = MLJ.report(ds.mach).features
-@btime pasomodel(MLJ.fitted_params(ds.mach).forest; featurenames);
-# 308.047 μs (3322 allocations: 128.24 KiB)
-@btime solemodel(MLJ.fitted_params(ds.mach).forest; featurenames);
-# 1.287 ms (6452 allocations: 436.05 KiB)
-
-# ---------------------------------------------------------------------------- #
 pasoroot(m::PasoDecisionTree) = m.root
 models(m::PasoDecisionEnsemble) = m.models
 
 function set_predictions(
-    info  :: NamedTuple,
+    info  :: Base.RefValue{<:NamedTuple},
     preds :: AbstractVector{T},
     y     :: AbstractVector{S}
-)::NamedTuple where {T,S<:SoleModels.Label}
-    merge(info, (supporting_predictions=preds, supporting_labels=y))
+)::Base.RefValue{<:NamedTuple} where {T,S<:SoleModels.Label}
+    info[] = merge(info[], (supporting_predictions=preds, supporting_labels=y))
+    return info
 end
 
 aggregation(m::PasoDecisionEnsemble) = m.aggregation
 weights(m::PasoDecisionEnsemble) = m.weights
 # Returns the aggregation function, patched by weights if the model has them.
 function weighted_aggregation(m::PasoDecisionEnsemble)
-    if isempty(weights(m))
+    if isnothing(weights(m))
         aggregation(m)
     else
         function (labels; kwargs...)
@@ -467,18 +598,14 @@ function pasoapply!(
 end
 
 # ---------------------------------------------------------------------------- #
-#                        nuova SoleXplorer train_test                          #
-# ---------------------------------------------------------------------------- #
-# Per poter fare dei benchmark comparativi, preferirei scrivere una nuova funzione train_test
-# di Sole, che usa le nuove funzioni
-
 function xplorer_apply(
     ds :: SoleXplorer.DecisionTreeApply,
     X  :: AbstractDataFrame,
     y  :: AbstractVector
 )
     featurenames = MLJ.report(ds.mach).features
-    solem        = pasomodel(MLJ.fitted_params(ds.mach).tree; featurenames)
+    classlabels = sort(MLJ.report(ds.mach).classes_seen)
+    solem        = pasomodel(MLJ.fitted_params(ds.mach).tree; featurenames, classlabels)
     logiset      = scalarlogiset(X, allow_propositional = true)
     pasoapply!(solem, logiset, y)
     return solem
@@ -491,13 +618,13 @@ function xplorer_apply(
 )
     classlabels  = ds.mach.fitresult[2][sortperm((ds.mach).fitresult[3])]
     featurenames = MLJ.report(ds.mach).features
-    solem        = pasomodel(MLJ.fitted_params(ds.mach).forest; classlabels, featurenames)
+    solem        = pasomodel(MLJ.fitted_params(ds.mach).forest; featurenames, classlabels)
     logiset      = scalarlogiset(X, allow_propositional = true)
     pasoapply!(solem, logiset, y)
     return solem
 end
 
-function _paso_test(ds::SoleXplorer.EitherDataSet)::SoleXplorer.SModel
+function _paso_test(ds::SoleXplorer.EitherDataSet)::SoleXplorer.SoleModel
     n_folds   = length(ds.pidxs)
     solemodel = Vector{AbstractModel}(undef, n_folds)
 
@@ -512,207 +639,91 @@ function _paso_test(ds::SoleXplorer.EitherDataSet)::SoleXplorer.SModel
         solemodel[i] = xplorer_apply(ds, X_test, y_test)
     end
 
-    return SoleXplorer.SModel(ds, solemodel)
+    return SoleXplorer.SoleModel(ds, solemodel)
 end
 
-function paso_test(args...; kwargs...)::SoleXplorer.SModel
+function paso_test(args...; kwargs...)::SoleXplorer.SoleModel
     ds = SoleXplorer._setup_dataset(args...; kwargs...)
     _paso_test(ds)
 end
 
-paso_test(ds::SoleXplorer.AbstractDataSet)::SoleXplorer.SModel = _paso_test(ds)
+paso_test(ds::SoleXplorer.AbstractDataSet)::SoleXplorer.SoleModel = _paso_test(ds)
 
-# per completare l'opera dobbiamo scrivere i metodi di apply! che accettano PasoDecisionTree e PasoEnsemble
-
-# Verifichiamo il corretto funzionamento
-dsc = setup_dataset(
-    Xc, yc;
-    model=DecisionTreeClassifier(),
-    resample=Holdout(shuffle=true),
-        train_ratio=0.7,
-        rng=Xoshiro(1),   
-)
-solemc = paso_test(dsc)
-model_new = symbolic_analysis(
-    dsc, solemc;
-    measures=(accuracy, kappa)
-)
-
-# Esperimento originale
-model_old = symbolic_analysis(
-    Xc, yc,
-    model=DecisionTreeClassifier(),
-    resample=Holdout(shuffle=true),
-    train_ratio=0.7,
-    rng=Xoshiro(1),
-    measures=(accuracy, kappa)
-)
-
-@test model_new.measures.measures_values == model_old.measures.measures_values
-# test superato
-
-# Ora diamo un occhiata ai benchmark per vedere se effettivamente siamo migliorati
-@btime begin
-    setup_dataset(
-        Xc, yc;
-        model=DecisionTreeClassifier(),
-        resample=Holdout(shuffle=true),
-            train_ratio=0.7,
-            rng=Xoshiro(1),   
-    )
-    solemc = paso_test(dsc)
-    model_new = symbolic_analysis(
-        dsc, solemc;
-        measures=(accuracy, kappa)
-    )
-end
-# 315.291 μs (3013 allocations: 214.52 KiB)
-# con Ref migliora leggermente
-# 314.580 μs (2992 allocations: 212.86 KiB)
-
-@btime symbolic_analysis(
-    Xc, yc,
-    model=DecisionTreeClassifier(),
-    resample=Holdout(shuffle=true),
-    train_ratio=0.7,
-    rng=Xoshiro(1),
-    measures=(accuracy, kappa)
-)
-# 451.912 μs (3370 allocations: 247.12 KiB)
-
-# Qualcosina è migliorato, però abbiamo visto che è sulle random forest che sole
-# perde troppo rispetto a MLJ. vediamo ora come si comporta.
-
-dsc = setup_dataset(
-    Xc, yc;
-    model=RandomForestClassifier(),
-    resample=Holdout(shuffle=true),
-        train_ratio=0.7,
-        rng=Xoshiro(1),   
-)
-solemc = paso_test(dsc)
-model_new = symbolic_analysis(
-    dsc, solemc;
-    measures=(accuracy, kappa)
-)
-
-# Esperimento originale
-model_old = symbolic_analysis(
-    Xc, yc,
-    model=RandomForestClassifier(),
-    resample=Holdout(shuffle=true),
-    train_ratio=0.7,
-    rng=Xoshiro(1),
-    measures=(accuracy, kappa)
-)
-
-@test model_new.measures.measures_values == model_old.measures.measures_values
-# test superato
-
-# Ora diamo un occhiata ai benchmark per vedere se effettivamente siamo migliorati
-@btime begin
-    setup_dataset(
-        Xc, yc;
-        model=RandomForestClassifier(),
-        resample=Holdout(shuffle=true),
-            train_ratio=0.7,
-            rng=Xoshiro(1),   
-    )
-    solemc = paso_test(dsc)
-    model_new = symbolic_analysis(
-        dsc, solemc;
-        measures=(accuracy, kappa)
-    )
-end
-# 8.548 ms (96136 allocations: 4.92 MiB)
-# e quadagnamo pure qui
-# 7.896 ms (91382 allocations: 4.60 MiB)
-
-@btime symbolic_analysis(
-    Xc, yc,
-    model=RandomForestClassifier(),
-    resample=Holdout(shuffle=true),
-    train_ratio=0.7,
-    rng=Xoshiro(1),
-    measures=(accuracy, kappa)
-)
-# 14.716 ms (183395 allocations: 9.30 MiB)
-
-# funzionerà ancora? sulla carta potremmo dire di si, verifichiamolo con
-# una battuta di test come fatto all'inizio:
-function _pasorules(
-    m::PasoDecisionEnsemble,
-    # aggiunto arg i, root.info
-    i::NamedTuple;
-    suppress_parity_warning = true,
+# ---------------------------------------------------------------------------- #
+function paso_analysis(
+    X::AbstractDataFrame,
+    y::AbstractVector,
+    w::SoleXplorer.OptVector = nothing;
+    extractor::Union{Nothing,SoleXplorer.RuleExtractor}=nothing,
+    measures::Tuple{Vararg{SoleXplorer.FussyMeasure}}=(),
     kwargs...
+)::SoleXplorer.ModelSet
+    ds = SoleXplorer._setup_dataset(X, y, w; kwargs...)
+    solem = _paso_test(ds)
+    SoleXplorer._symbolic_analysis(ds, solem; extractor, measures)
+end
+
+# ---------------------------------------------------------------------------- #
+model_new = paso_analysis(
+    Xc, yc,
+    model=DecisionTreeClassifier(),
+    resample=Holdout(shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy, kappa)
+);
+
+# Esperimento originale
+model_old = symbolic_analysis(
+    Xc, yc,
+    model=DecisionTreeClassifier(),
+    resample=Holdout(shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy, kappa)
 )
-    modelrules = [_pasorules(subm, i; kwargs...) for subm in models(m)]
-    @assert all(r->consequent(r) isa ConstantModel, Iterators.flatten(modelrules))
 
-    SoleModels.IterTools.imap(rulecombination->begin
-        rulecombination = collect(rulecombination)
-        ant = SoleModels.join_antecedents(antecedent.(rulecombination))
-        # qui in bestguess ho dovuto usare 'nothing' al posto di m.weights
-        # perchè ho iniziato ad usare, al posto della Union{Nothing, Vector},
-        # Vector[] vettore vuoto al posto di Nothing.
-        # Mi sembra più carino, anche perchè altrimenti il codice sarebbe pieno di Union{nothing, ...}
-        # quindi dovrei modificare la bestgues per ceckare 'isempty' anzichè 'isnothing'
-        # controllato il benchmark, sono identiche.
-        # per ora basta passargli nothing, ma mi devo ricordare di rimettere m.weights! 
-        o_cons = SoleModels.bestguess(outcome.(consequent.(rulecombination)), nothing; suppress_parity_warning)
-        i_cons = merge(SoleModels.info.(consequent.(rulecombination))...)
-        cons = ConstantModel(o_cons, i_cons)
-        infos = merge(SoleModels.info.(rulecombination)...)
-        Rule(ant, cons, infos)
-        end, Iterators.product(modelrules...)
-    )
-end
-_pasorules(m::PasoDecisionTree, i::NamedTuple; kwargs...) = _pasorules(pasoroot(m), i; kwargs...)
+@test model_new.measures.measures_values == model_old.measures.measures_values
 
-# Partiamo con DecisionTreeClassifier
-for seed in 1:200
-    dsc = setup_dataset(
-        Xc, yc;
-        model=DecisionTreeClassifier(),
-        resample=Holdout(;shuffle=true),
-        rng=Xoshiro(seed),
-    )
-    soleold = train_test(dsc)
-    solenew = paso_test(dsc)
+model_new = paso_analysis(
+    Xc, yc,
+    model=RandomForestClassifier(),
+    resample=Holdout(shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy, kappa)
+);
 
-    modelold = soleold.sole[1]
-    modelnew = solenew.sole[1]
-    test_original = listrules(modelold)
-    test_paso = pasorules(modelnew)
+# Esperimento originale
+model_old = symbolic_analysis(
+    Xc, yc,
+    model=RandomForestClassifier(),
+    resample=Holdout(shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy, kappa)
+);
 
-    @test length(test_original) == length(test_paso)
-    for i in 1:length(test_paso)
-        @test test_original[i].antecedent.grandchildren == test_paso[i].antecedent.grandchildren
-        @test test_original[i].consequent.outcome == test_paso[i].consequent.outcome
-    end
-end
+@test model_new.measures.measures_values == model_old.measures.measures_values
+# test superato
 
-# proviamo anche con RandomForest
-for seed in 1:50
-    dsc = setup_dataset(
-        Xc, yc;
-        # con 100 alberi si rompe julia!
-        model=RandomForestClassifier(n_trees=5),
-        resample=Holdout(;shuffle=true),
-        rng=Xoshiro(seed),
-    )
-    soleold = train_test(dsc)
-    solenew = paso_test(dsc)
+# Ora diamo un occhiata ai benchmark per vedere se effettivamente siamo migliorati
+@btime paso_analysis(
+    Xc, yc,
+    model=RandomForestClassifier(),
+    resample=Holdout(shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy, kappa)
+);
+# 10.552 ms (104009 allocations: 5.84 MiB)
 
-    modelold = soleold.sole[1]
-    modelnew = solenew.sole[1]
-    test_original = listrules(modelold)
-    test_paso = pasorules(modelnew)
-
-    @test length(test_original) == length(test_paso)
-    for i in 1:length(test_paso)
-        @test test_original[i].antecedent.grandchildren == test_paso[i].antecedent.grandchildren
-        @test test_original[i].consequent.outcome == test_paso[i].consequent.outcome
-    end
-end
+@btime symbolic_analysis(
+    Xc, yc,
+    model=RandomForestClassifier(),
+    resample=Holdout(shuffle=true),
+    train_ratio=0.7,
+    rng=Xoshiro(1),
+    measures=(accuracy, kappa)
+);
+# 15.084 ms (183395 allocations: 9.30 MiB)
